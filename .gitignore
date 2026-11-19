@@ -1,0 +1,8 @@
+node_modules/
+.npm-cache/
+.e2e-chrome/
+.screenshots/
+dist/
+.vite/
+coverage/
+*.log
