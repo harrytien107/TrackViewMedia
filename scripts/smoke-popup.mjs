@@ -6,6 +6,7 @@ import { resolve, extname, sep } from 'node:path';
 import { chromium } from 'playwright-core';
 
 const root = resolve('dist');
+const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));
 const server = createServer(async (req, res) => {
   const path = resolve(root, decodeURIComponent((req.url ?? '/').split('?')[0].replace(/^\//, '')));
   if (!path.startsWith(`${root}${sep}`)) { res.writeHead(403).end(); return; }
@@ -32,9 +33,10 @@ try {
     executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   });
   const page = await browser.newPage({ viewport: { width: 400, height: 580 } });
-  await page.addInitScript((record) => {
+  await page.addInitScript(({ record, extensionManifest }) => {
     const state = { [`selected:${record.platform}:${record.video_id}`]: record };
     window.chrome = {
+      runtime: { getManifest: () => extensionManifest },
       tabs: {
         query: async () => [{ url: 'https://www.instagram.com/ssam_kbbq/reels/', id: 1 }],
         sendMessage: async () => ({ platform: 'Instagram', username: 'ssam_kbbq', kind: 'profile' }),
@@ -56,12 +58,13 @@ try {
         },
       },
     };
-  }, sample);
+  }, { record: sample, extensionManifest: manifest });
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/popup.html`);
   await page.getByText('1', { exact: true }).first().waitFor();
   if (!(await page.locator('body').innerText()).includes('ssam_kbbq')) throw new Error('Current profile missing');
+  if (!(await page.locator('body').innerText()).includes(`v${manifest.version}`)) throw new Error('Incorrect popup version');
   await page.getByRole('button', { name: 'Export JSON' }).click();
   await page.getByText('Exported 1 selected video.').waitFor();
   const download = await page.evaluate(() => window.__downloaded);

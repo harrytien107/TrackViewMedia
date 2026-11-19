@@ -1,6 +1,8 @@
 export type Platform = 'Instagram' | 'TikTok' | 'Facebook';
 
 export type Metric = number | string | null;
+export type DatePrecision = 'timestamp' | 'day' | 'month_day' | 'relative' | null;
+export type MetadataSource = 'tile' | 'embedded' | 'video_page' | null;
 
 export interface VideoRecord {
   platform: Platform;
@@ -11,6 +13,13 @@ export interface VideoRecord {
   published_at: string | null;
   /** Source-provided calendar day, retained when an exact timestamp is unavailable. */
   published_date: string | null;
+  /** A platform-provided relative label. Never treat this as an ISO timestamp. */
+  published_relative?: string | null;
+  /** A platform date label without a year, such as "Nov 18". */
+  published_label?: string | null;
+  date_precision?: DatePrecision;
+  date_source?: MetadataSource;
+  views_source?: MetadataSource;
   views: Metric;
   views_exact: boolean | null;
   likes: Metric;
@@ -21,7 +30,7 @@ export interface VideoRecord {
 }
 
 export type VideoMetadata = Partial<Pick<VideoRecord,
-  'caption' | 'published_at' | 'published_date' | 'views' | 'views_exact' |
+  'caption' | 'published_at' | 'published_date' | 'published_relative' | 'published_label' | 'date_source' | 'views_source' | 'views' | 'views_exact' |
   'likes' | 'likes_exact' | 'comments' | 'comments_exact'>>;
 
 export interface PageContext {
@@ -50,4 +59,9 @@ export type ResolveRequest = {
   url: string;
 };
 
-export type ResolveResponse = { metadata: VideoMetadata | null };
+export type ResolveResponse = {
+  metadata: VideoMetadata | null;
+  status?: 'resolved' | 'cached' | 'unavailable' | 'rate_limited';
+  /** Epoch milliseconds when requesting this video again is useful. */
+  retry_after?: number;
+};

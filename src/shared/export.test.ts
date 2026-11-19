@@ -23,4 +23,26 @@ describe('selected-video exports', () => {
     expect(csv).toContain('"1.2K","false","120","true"');
     expect(csv).toContain('"0012345"');
   });
+  it('exports relative dates as approximate without manufacturing published_at', () => {
+    const approximate = {
+      ...selected, published_at: null, published_date: null, published_relative: '3 days ago',
+      date_precision: 'relative' as const, date_source: 'tile' as const,
+    };
+    const parsed = JSON.parse(toJson([approximate]))[0];
+    expect(parsed.published_at).toBeNull();
+    expect(parsed.date_precision).toBe('relative');
+    expect(toCsv([approximate])).toContain('"3 days ago","relative","tile"');
+  });
+  it('exports a yearless platform date label without inventing an ISO date', () => {
+    const dateLabel = {
+      ...selected, published_at: null, published_date: null, published_label: 'Nov 18',
+      date_precision: 'day' as const, date_source: 'tile' as const,
+    };
+    const parsed = JSON.parse(toJson([dateLabel]))[0];
+    expect(parsed.published_at).toBeNull();
+    expect(parsed.published_date).toBeNull();
+    expect(parsed.published_label).toBe('Nov 18');
+    expect(parsed.date_precision).toBe('day');
+    expect(toCsv([dateLabel])).toContain('"Nov 18"');
+  });
 });

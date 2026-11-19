@@ -1,5 +1,5 @@
 import type { VideoMetadata, VideoRecord } from './types';
-import { mergeMetadata } from './metadata';
+import { datePrecision, mergeMetadata } from './metadata';
 
 export const SELECTED_PREFIX = 'selected:';
 export const selectionKey = (record: Pick<VideoRecord, 'platform' | 'video_id'>) =>
@@ -38,11 +38,14 @@ export async function updateSelectedMetadata(record: VideoRecord, extra: VideoMe
   const key = selectionKey(record);
   const existing = (await chrome.storage.local.get(key))[key] as VideoRecord | undefined;
   if (!existing) return;
-  const { caption, published_at, published_date, views, views_exact, likes, likes_exact, comments, comments_exact } =
+  const { caption, published_at, published_date, published_relative, published_label, date_source, views_source, views, views_exact, likes, likes_exact, comments, comments_exact } =
     mergeMetadata(existing, extra);
   await chrome.storage.local.set({ [key]: {
     ...existing, caption: caption ?? null, published_at: published_at ?? null,
-    published_date: published_date ?? null,
+    published_date: published_date ?? null, published_relative: published_relative ?? null,
+    published_label: published_label ?? null,
+    date_precision: datePrecision({ published_at, published_date, published_relative, published_label }),
+    date_source: date_source ?? null, views_source: views_source ?? null,
     views: views ?? null, views_exact: views_exact ?? null,
     likes: likes ?? null, likes_exact: likes_exact ?? null,
     comments: comments ?? null, comments_exact: comments_exact ?? null,

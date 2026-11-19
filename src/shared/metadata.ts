@@ -1,4 +1,4 @@
-import type { Metric, Platform, VideoMetadata } from './types';
+import type { DatePrecision, MetadataSource, Metric, Platform, VideoMetadata } from './types';
 import { identityFromUrl } from './urls';
 
 const instantRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/i;
@@ -43,7 +43,43 @@ export function verifiedCalendarDate(value: unknown): string | null {
   return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-export function localDate(iso: string | null, dateOnly: string | null = null): { short: string; full: string } {
+/** Relative labels are displayed verbatim, never converted into invented timestamps. */
+export function verifiedRelativeDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.trim().replace(/\s+/g, ' ');
+  if (/^(?:today|yesterday|\d{1,3}\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago|\d{1,3}\s*[mhdwy]\s*(?:ago)?)$/i.test(text)) {
+    return text;
+  }
+  return null;
+}
+
+/** Preserve month/day labels when the platform omits the year. */
+export function verifiedDateLabel(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.trim().replace(/\s+/g, ' ');
+  const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july',
+    'august', 'september', 'october', 'november', 'december'];
+  const monthFirst = text.match(/^([a-z]+)\.?\s+(\d{1,2})$/i);
+  const dayFirst = text.match(/^(\d{1,2})\s+([a-z]+)\.?$/i);
+  const monthText = monthFirst?.[1] ?? dayFirst?.[2];
+  const day = Number(monthFirst?.[2] ?? dayFirst?.[1]);
+  if (!monthText || !Number.isInteger(day)) return null;
+  const monthIndex = months.findIndex((month) =>
+    monthText.toLowerCase() === month || monthText.toLowerCase() === month.slice(0, 3));
+  if (monthIndex < 0) return null;
+  const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthIndex];
+  return day >= 1 && day <= daysInMonth ? text : null;
+}
+
+export function datePrecision(meta: VideoMetadata): DatePrecision {
+  if (verifiedTimestamp(meta.published_at)) return 'timestamp';
+  if (verifiedCalendarDate(meta.published_date)) return 'day';
+  if (verifiedDateLabel(meta.published_label)) return 'month_day';
+  if (verifiedRelativeDate(meta.published_relative)) return 'relative';
+  return null;
+}
+
+export function localDate(iso: string | null, dateOnly: string | null = null, relative: string | null = null, label: string | null = null): { short: string; full: string } {
   if (iso && verifiedTimestamp(iso)) {
     const date = new Date(iso);
     return {
@@ -59,6 +95,10 @@ export function localDate(iso: string | null, dateOnly: string | null = null): {
     }).format(new Date(`${day}T12:00:00Z`));
     return { short, full: `Published date: ${short}. Exact publication time unavailable.` };
   }
+  const dateLabel = verifiedDateLabel(label);
+  if (dateLabel) return { short: dateLabel, full: `Date shown by the platform: ${dateLabel}. Year and exact publication time unavailable.` };
+  const relativeLabel = verifiedRelativeDate(relative);
+  if (relativeLabel) return { short: `~${relativeLabel}`, full: `Approximate publication date shown by the platform: ${relativeLabel}. Exact date and time unavailable.` };
   return { short: 'Date unavailable', full: 'Exact publication date and time unavailable' };
 }
 
@@ -97,12 +137,35 @@ function metricFields(out: VideoMetadata, name: 'views' | 'likes' | 'comments', 
 export function mergeMetadata(...parts: VideoMetadata[]): VideoMetadata {
   const out: VideoMetadata = {};
   for (const part of parts) {
-    if (part.published_at && verifiedTimestamp(part.published_at)) out.published_at = verifiedTimestamp(part.published_at);
-    if (part.published_date && verifiedCalendarDate(part.published_date)) out.published_date = verifiedCalendarDate(part.published_date);
+    const timestamp = verifiedTimestamp(part.published_at);
+    const day = verifiedCalendarDate(part.published_date);
+    const relative = verifiedRelativeDate(part.published_relative);
+    if (timestamp) {
+      if (part.date_source) out.date_source = part.date_source;
+      else if (out.published_at !== timestamp) delete out.date_source;
+      out.published_at = timestamp;
+    } else if (day && !out.published_at) {
+      if (part.date_source) out.date_source = part.date_source;
+      else if (out.published_date !== day) delete out.date_source;
+    } else if (relative && !out.published_at && !out.published_date && !out.published_label) {
+      if (part.date_source) out.date_source = part.date_source;
+    }
+    const dateLabel = verifiedDateLabel(part.published_label);
+    if (dateLabel && !out.published_at && !out.published_date) {
+      if (part.date_source) out.date_source = part.date_source;
+      else if (out.published_label !== dateLabel) delete out.date_source;
+    }
+    if (day) out.published_date = day;
+    if (relative) out.published_relative = relative;
+    if (dateLabel) out.published_label = dateLabel;
     if (part.caption) out.caption = cleanCaption(part.caption);
     for (const name of ['views', 'likes', 'comments'] as const) {
       if (part[name] !== null && part[name] !== undefined) {
         if (out[`${name}_exact`] === true && part[`${name}_exact`] !== true) continue;
+        if (name === 'views') {
+          if (part.views_source) out.views_source = part.views_source;
+          else if (out.views !== part.views) delete out.views_source;
+        }
         out[name] = part[name];
         out[`${name}_exact`] = part[`${name}_exact`] ?? null;
       }
@@ -111,13 +174,19 @@ export function mergeMetadata(...parts: VideoMetadata[]): VideoMetadata {
   return out;
 }
 
+function withSource(data: VideoMetadata, source: MetadataSource): VideoMetadata {
+  if (datePrecision(data)) data.date_source = source;
+  if (data.views !== null && data.views !== undefined) data.views_source = source;
+  return data;
+}
+
 function extractItem(item: Record<string, unknown>, platform: Platform): VideoMetadata {
   const out: VideoMetadata = {};
   const fields = platform === 'Instagram'
-    ? ['taken_at_timestamp', 'taken_at', 'published_at', 'datePublished', 'uploadDate']
+    ? ['taken_at_timestamp', 'taken_at', 'taken_at_date', 'published_at', 'datePublished', 'uploadDate']
     : platform === 'TikTok'
-      ? ['createTime', 'create_time', 'datePublished', 'uploadDate']
-      : ['publish_time', 'creation_time', 'created_time', 'datePublished', 'uploadDate'];
+      ? ['createTime', 'create_time', 'createTimeISO', 'datePublished', 'uploadDate']
+      : ['publish_time', 'creation_time', 'created_time', 'publish_date', 'datePublished', 'uploadDate'];
   for (const key of fields) {
     const parsed = verifiedTimestamp(item[key]);
     if (parsed) { out.published_at = parsed; break; }
@@ -125,6 +194,10 @@ function extractItem(item: Record<string, unknown>, platform: Platform): VideoMe
   for (const key of fields) {
     const day = verifiedCalendarDate(item[key]);
     if (day) { out.published_date = day; break; }
+  }
+  for (const key of ['createTimeText', 'relativeTime', 'publishTimeText']) {
+    const label = verifiedRelativeDate(item[key]);
+    if (label) { out.published_relative = label; break; }
   }
   for (const key of ['desc', 'caption', 'description', 'title', 'accessibility_caption']) {
     const caption = cleanCaption(item[key]);
@@ -159,28 +232,38 @@ export function metadataFromStructuredData(data: unknown, id: string, platform: 
     seen.add(value);
     if (Array.isArray(value)) { for (const child of value) if (typeof child === 'object') stack.push(child); continue; }
     const node = value as Record<string, unknown>;
-    const ids = [node.id, node.videoId, node.video_id, node.shortcode, node.code, node.pk];
+    const ids = [node.id, node.videoId, node.video_id, node.shortcode, node.code, node.pk, node.media_id];
     if (ids.some((n) => typeof n === 'string' || typeof n === 'number' ? String(n) === id : false)) {
       parts.push(extractItem(node, platform));
     }
     if (platform === 'Facebook' && node.creation_time !== undefined && facebookStoryMatchesVideo(node, id)) {
       parts.push(extractItem(node, platform));
     }
-    for (const child of Object.values(node)) if (child && typeof child === 'object') stack.push(child);
+    for (const [key, child] of Object.entries(node)) {
+      // TikTok and some Instagram hydration maps use the video ID as the key.
+      if (key === id && child && typeof child === 'object' && !Array.isArray(child)) {
+        parts.push(extractItem(child as Record<string, unknown>, platform));
+      }
+      if (child && typeof child === 'object') stack.push(child);
+    }
   }
   return mergeMetadata(...parts);
 }
 
 export function metadataFromScriptTexts(texts: string[], id: string, platform: Platform): VideoMetadata {
-  const found: VideoMetadata[] = [];
+  let found: VideoMetadata = {};
   const matches = texts.filter((text) => text.includes(id) && text.length <= 2_000_000);
   const hasDateField = /"(?:taken_at_timestamp|taken_at|published_at|datePublished|uploadDate|createTime|create_time|publish_time|creation_time|created_time)"\s*:/;
-  const priority = matches.filter((text) => hasDateField.test(text)).slice(0, 8);
-  const remainder = matches.filter((text) => !hasDateField.test(text)).slice(0, 4);
-  for (const text of [...priority, ...remainder]) {
-    try { found.push(metadataFromStructuredData(JSON.parse(text), id, platform)); } catch { /* invalid JSON, skip */ }
+  const priority = matches.filter((text) => hasDateField.test(text));
+  const remainder = matches.filter((text) => !hasDateField.test(text));
+  for (const text of [...priority, ...remainder].slice(0, 100)) {
+    try {
+      const raw = text.replace(/^for\s*\(;;\)\s*;?\s*/, '');
+      found = mergeMetadata(found, metadataFromStructuredData(JSON.parse(raw), id, platform));
+      if (found.published_at && found.views !== undefined && found.views !== null) break;
+    } catch { /* invalid JSON, skip */ }
   }
-  return mergeMetadata(...found);
+  return withSource(found, 'embedded');
 }
 
 function decodeEntities(value: string): string {
@@ -250,6 +333,26 @@ function instagramPostTimestamp(html: string, id: string): string | null {
   return null;
 }
 
+function tiktokDateFromVideoHtml(html: string): VideoMetadata {
+  for (const match of html.matchAll(/<(time|span)\b([^>]*)>([\s\S]*?)<\/\1\s*>/gi)) {
+    const tag = match[1].toLowerCase();
+    const attrs = readHtmlAttributes(match[2]);
+    const marker = `${attrs['data-e2e'] ?? ''} ${attrs['data-testid'] ?? ''}`;
+    if (tag !== 'time' && !/(?:create.?time|publish|date)/i.test(marker)) continue;
+    const text = decodeEntities(match[3].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim());
+    const raw = attrs.datetime ?? text;
+    const timestamp = verifiedTimestamp(raw);
+    if (timestamp) return { published_at: timestamp };
+    const day = verifiedCalendarDate(raw);
+    if (day) return { published_date: day };
+    const relative = verifiedRelativeDate(raw);
+    if (relative) return { published_relative: relative };
+    const label = verifiedDateLabel(raw);
+    if (label) return { published_label: label };
+  }
+  return {};
+}
+
 /** For a fetched *single video page*: meta tags and JSON-LD refer to that video. */
 export function metadataFromVideoHtml(html: string, id: string, platform: Platform): VideoMetadata {
   const out: VideoMetadata[] = [];
@@ -274,6 +377,9 @@ export function metadataFromVideoHtml(html: string, id: string, platform: Platfo
     // Scope <time> to the permalink for this Reel. Comment timestamps can
     // share the post's displayed calendar date and must never be borrowed.
     part.published_at = instagramPostTimestamp(html, id) ?? undefined;
+  }
+  if (platform === 'TikTok' && !part.published_at && !part.published_date) {
+    Object.assign(part, tiktokDateFromVideoHtml(html));
   }
   out.push(part);
 
@@ -304,18 +410,23 @@ export function metadataFromVideoHtml(html: string, id: string, platform: Platfo
       }
     }
   }
-  return mergeMetadata(...out);
+  return withSource(mergeMetadata(...out), 'video_page');
 }
 
-export function metadataFromTile(anchor: HTMLElement): VideoMetadata {
+export function metadataFromTile(anchor: HTMLElement, platform?: Platform): VideoMetadata {
   const out: VideoMetadata = {};
-  for (const element of anchor.querySelectorAll('time[datetime], [data-published-at], [data-create-time]')) {
+  for (const element of anchor.querySelectorAll('time, span, [data-published-at], [data-create-time], [data-e2e*="time"], [data-e2e*="date"], [data-testid*="publish"], [data-testid*="date"], [title*="ago" i]')) {
     const el = element as HTMLElement;
-    const raw = el.getAttribute('datetime') ?? el.dataset.publishedAt ?? el.dataset.createTime;
+    const raw = el.getAttribute('datetime') ?? el.dataset.publishedAt ?? el.dataset.createTime ??
+      (el.getAttribute('title') && verifiedRelativeDate(el.getAttribute('title')) ? el.getAttribute('title') : el.textContent?.trim());
     const iso = verifiedTimestamp(raw);
     if (iso) { out.published_at = iso; break; }
     const day = verifiedCalendarDate(raw);
     if (day) out.published_date = day;
+    const relative = verifiedRelativeDate(raw);
+    if (relative) out.published_relative = relative;
+    const dateLabel = verifiedDateLabel(raw);
+    if (dateLabel) out.published_label = dateLabel;
   }
   const caption = anchor.getAttribute('title') ?? anchor.querySelector('img[alt]')?.getAttribute('alt');
   if (caption && caption.length > 3) out.caption = cleanCaption(caption);
@@ -331,5 +442,39 @@ export function metadataFromTile(anchor: HTMLElement): VideoMetadata {
     const match = raw.match(/\d[\d,.]*\s*[KMB]?/i);
     if (match) metricFields(out, 'views', match[0]);
   }
-  return out;
+  if (platform === 'Instagram' && (out.views === undefined || out.views === null)) {
+    for (const icon of anchor.querySelectorAll('[aria-label*="view" i], [title*="view" i]')) {
+      const label = icon.getAttribute('aria-label') ?? icon.getAttribute('title') ?? '';
+      if (!/view\s*count|views?/i.test(label)) continue;
+      for (const container of [icon.parentElement, icon.parentElement?.parentElement]) {
+        const text = container?.textContent?.trim() ?? '';
+        if (text.length > 24) continue;
+        const metric = parseMetric(text);
+        if (metric.value !== null) {
+          out.views = metric.value;
+          out.views_exact = metric.exact;
+          break;
+        }
+      }
+      if (out.views !== undefined) break;
+    }
+  }
+  if (platform === 'Instagram' && (out.views === undefined || out.views === null)) {
+    // Reel tiles commonly render a play glyph beside an unlabeled view count.
+    // Only read a compact glyph-and-count element, avoiding likes and captions.
+    for (const icon of anchor.querySelectorAll('svg[aria-label*="play" i], svg[aria-label*="view" i], svg:has(polygon), [data-testid*="play" i]')) {
+      if (icon.closest('[data-track-view-media]')) continue;
+      for (const element of [icon.parentElement, icon.parentElement?.parentElement]) {
+        const text = element?.textContent?.trim() ?? '';
+        if (!/^\d[\d,.]*\s*[KMB]?$/i.test(text)) continue;
+        const metric = parseMetric(text);
+        if (metric.value === null) continue;
+        out.views = metric.value;
+        out.views_exact = metric.exact;
+        break;
+      }
+      if (out.views !== undefined) break;
+    }
+  }
+  return withSource(out, 'tile');
 }

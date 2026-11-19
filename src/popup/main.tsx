@@ -71,7 +71,7 @@ function App() {
       <header>
         <div className="logo" aria-hidden="true">▶</div>
         <div><h1>TrackViewMedia</h1><p>Public video insights</p></div>
-        <span className="v">v0.1</span>
+        <span className="v">v{chrome.runtime.getManifest().version}</span>
       </header>
 
       <section className="location" aria-label="Current page">

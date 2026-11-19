@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { localDate, mergeMetadata, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, verifiedTimestamp } from './metadata';
+import { datePrecision, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, verifiedTimestamp } from './metadata';
 
 describe('publication times', () => {
   it('accepts exact timezone-aware times and unix seconds', () => {
@@ -13,6 +13,25 @@ describe('publication times', () => {
     expect(verifiedTimestamp('2026-99-99T09:11:12Z')).toBeNull();
     expect(localDate(null).short).toBe('Date unavailable');
   });
+  it('distinguishes calendar days and platform-relative dates from exact instants', () => {
+    const relative = { published_relative: '3 days ago', date_source: 'tile' } as const;
+    expect(datePrecision(relative)).toBe('relative');
+    expect(localDate(null, null, relative.published_relative).short).toBe('~3 days ago');
+    expect(datePrecision({ published_date: '2026-11-18' })).toBe('day');
+    expect(localDate(null, '2026-11-18').short).toContain('18');
+    expect(localDate(null, '2026-11-18').short).toContain('2026');
+    expect(mergeMetadata(relative).published_at).toBeUndefined();
+  });
+  it('displays a yearless platform date label without inventing a year', () => {
+    expect(datePrecision({ published_label: 'Nov 18' })).toBe('month_day');
+    expect(datePrecision({ published_label: 'Feb 30' })).toBeNull();
+    expect(datePrecision({ published_label: 'Apr 31' })).toBeNull();
+    expect(localDate(null, null, null, 'Nov 18')).toEqual({
+      short: 'Nov 18',
+      full: 'Date shown by the platform: Nov 18. Year and exact publication time unavailable.',
+    });
+    expect(mergeMetadata({ published_label: 'Nov 18', date_source: 'tile' }).published_at).toBeUndefined();
+  });
 });
 
 describe('metric accuracy', () => {
@@ -22,6 +41,14 @@ describe('metric accuracy', () => {
     expect(parseMetric('lots of views')).toEqual({ value: null, exact: null });
     expect(mergeMetadata({ views: 1204, views_exact: true }, { views: '1.2K', views_exact: false }))
       .toEqual({ views: 1204, views_exact: true });
+  });
+  it('retains reliable provenance when a stored record supplies null sources', () => {
+    const result = mergeMetadata(
+      { published_at: '2026-10-21T02:11:12.000Z', date_source: 'embedded', views: 1204, views_exact: true, views_source: 'tile' },
+      { published_at: '2026-10-21T02:11:12.000Z', date_source: null, views: 1204, views_exact: true, views_source: null },
+    );
+    expect(result.date_source).toBe('embedded');
+    expect(result.views_source).toBe('tile');
   });
 });
 
@@ -33,6 +60,26 @@ describe('metadata extraction', () => {
     } });
     const result = metadataFromScriptTexts([json], '123', 'TikTok');
     expect(result).toMatchObject({ published_at: '2026-10-21T02:11:12.000Z', views: 2000, caption: 'first' });
+  });
+  it('reads TikTok hydration by video ID and preserves an approximate label independently', () => {
+    const scripts = [JSON.stringify({ __DEFAULT_SCOPE__: { 'webapp.user-detail': {
+      itemList: [{ id: '123', createTime: '1792548672', statsV2: { playCount: '1.3K' } },
+        { id: '456', createTime: '1792548800', statsV2: { playCount: '2.1K' } }],
+    } } })];
+    expect(metadataFromScriptTexts(scripts, '123', 'TikTok')).toMatchObject({
+      published_at: '2026-10-21T02:11:12.000Z', views: '1.3K', views_exact: false, date_source: 'embedded',
+    });
+    const tile = document.createElement('a');
+    tile.innerHTML = '<span data-e2e="publish-time">3 days ago</span>';
+    const fromTile = metadataFromTile(tile, 'TikTok');
+    expect(fromTile).toMatchObject({ published_relative: '3 days ago', date_source: 'tile' });
+    expect(fromTile.published_at).toBeUndefined();
+  });
+
+  it('preserves TikTok month-and-day labels when the platform omits the year', () => {
+    const tile = document.createElement('a');
+    tile.innerHTML = '<span data-e2e="video-create-time">Nov 18</span>';
+    expect(metadataFromTile(tile, 'TikTok')).toMatchObject({ published_label: 'Nov 18', date_source: 'tile' });
   });
 
   it('finds relevant metadata after unrelated hydration scripts', () => {
@@ -51,6 +98,13 @@ describe('metadata extraction', () => {
       .toMatchObject({ published_at: '2026-10-21T02:11:12.000Z', caption: 'Food & drink' });
     expect(metadataFromVideoHtml('<script type="application/ld+json">{"@type":"VideoObject","uploadDate":"2026-10-21"}</script>', '123', 'Facebook').published_at)
       .toBeUndefined();
+  });
+
+  it('reads the displayed TikTok publication label from the single-video page', () => {
+    const html = '<span data-e2e="video-create-time">Nov 18</span>';
+    expect(metadataFromVideoHtml(html, '123', 'TikTok')).toMatchObject({
+      published_label: 'Nov 18', date_source: 'video_page',
+    });
   });
 
   it('rejects a timestamp from unrelated JSON-LD video objects', () => {
@@ -117,5 +171,10 @@ describe('metadata extraction', () => {
     document.body.innerHTML = `<a><img alt="Food reel"/><span aria-label="1.3K views"></span><time datetime="2026-10-21T09:11:12+07:00"></time></a>`;
     const data = metadataFromTile(document.querySelector('a')!);
     expect(data).toMatchObject({ caption: 'Food reel', published_at: '2026-10-21T02:11:12.000Z', views: '1.3K', views_exact: false });
+  });
+  it('reads compact Instagram view counts beside a thumbnail play glyph', () => {
+    document.body.innerHTML = `<a><img alt="Food"/><div><svg aria-label="Play"><polygon points="0,0 6,5 0,10"/></svg><span>8.7K</span></div></a>`;
+    expect(metadataFromTile(document.querySelector('a')!, 'Instagram'))
+      .toMatchObject({ views: '8.7K', views_exact: false, views_source: 'tile' });
   });
 });

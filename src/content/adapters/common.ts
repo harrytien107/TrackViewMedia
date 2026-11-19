@@ -23,7 +23,7 @@ export function linkedVideos(platform: Platform, selector: string): Candidate[] 
     const tile = usableTile(anchor);
     if (!tile || seenTiles.has(tile)) continue;
     seenTiles.add(tile);
-    videos.push({ anchor, tile, identity, metadata: metadataFromTile(tile) });
+    videos.push({ anchor, tile, identity, metadata: metadataFromTile(tile, platform) });
   }
   return videos;
 }

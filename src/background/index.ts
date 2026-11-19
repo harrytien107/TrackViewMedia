@@ -1,19 +1,29 @@
 import { identityFromUrl } from '../shared/urls';
-import { metadataFromVideoHtml } from '../shared/metadata';
+import { metadataFromVideoHtml, verifiedCalendarDate, verifiedTimestamp } from '../shared/metadata';
 import type { ResolveRequest, ResolveResponse, VideoMetadata } from '../shared/types';
 
 const CACHE_PREFIX = 'metadata:';
 const RATE_KEY = 'metadata_request_history';
 const POSITIVE_TTL = 7 * 24 * 60 * 60_000;
-const NEGATIVE_TTL = 6 * 60 * 60_000;
+const PARTIAL_TTL = 20 * 60_000;
+const NEGATIVE_TTL = 30 * 60_000;
 const WINDOW_MS = 5 * 60_000;
 const MAX_PER_WINDOW = 12;
 const MIN_GAP_MS = 2500;
 let work = Promise.resolve();
 let lastRequest = 0;
-const pending = new Map<string, Promise<VideoMetadata | null>>();
+const pending = new Map<string, Promise<ResolveResponse>>();
 
 type CacheEntry = { timestamp: number; metadata: VideoMetadata | null };
+
+export function cacheLifetime(metadata: VideoMetadata | null): number {
+  if (!metadata) return NEGATIVE_TTL;
+  if ((verifiedTimestamp(metadata.published_at) || verifiedCalendarDate(metadata.published_date)) &&
+      metadata.views !== undefined && metadata.views !== null) {
+    return POSITIVE_TTL;
+  }
+  return PARTIAL_TTL;
+}
 
 function validMessage(value: unknown): value is ResolveRequest {
   if (!value || typeof value !== 'object') return false;
@@ -31,11 +41,11 @@ function queue<T>(task: () => Promise<T>): Promise<T> {
   return next;
 }
 
-async function resolveMetadata(req: ResolveRequest): Promise<VideoMetadata | null> {
+async function resolveMetadata(req: ResolveRequest): Promise<ResolveResponse> {
   const cacheKey = `${CACHE_PREFIX}${req.platform}:${req.id}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey] as CacheEntry | undefined;
-  if (cached && Date.now() - cached.timestamp < (cached.metadata ? POSITIVE_TTL : NEGATIVE_TTL)) {
-    return cached.metadata;
+  if (cached && Date.now() - cached.timestamp < cacheLifetime(cached.metadata)) {
+    return { metadata: cached.metadata, status: 'cached', retry_after: cached.timestamp + cacheLifetime(cached.metadata) };
   }
   const existing = pending.get(cacheKey);
   if (existing) return existing;
@@ -45,7 +55,9 @@ async function resolveMetadata(req: ResolveRequest): Promise<VideoMetadata | nul
     const timestamps: number[] = Array.isArray(state[RATE_KEY])
       ? (state[RATE_KEY] as number[]).filter((time) => now - time < WINDOW_MS && time <= now)
       : [];
-    if (timestamps.length >= MAX_PER_WINDOW) return null;
+    if (timestamps.length >= MAX_PER_WINDOW) {
+      return { metadata: null, status: 'rate_limited' as const, retry_after: timestamps[0] + WINDOW_MS + 1000 };
+    }
     if (timestamps.length) lastRequest = Math.max(lastRequest, ...timestamps);
     const delay = Math.max(0, MIN_GAP_MS - (Date.now() - lastRequest));
     if (delay) await new Promise((done) => setTimeout(done, delay));
@@ -58,7 +70,7 @@ async function resolveMetadata(req: ResolveRequest): Promise<VideoMetadata | nul
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       const response = await fetch(req.url, {
-        credentials: 'omit', redirect: 'follow', signal: controller.signal,
+        credentials: 'include', redirect: 'follow', signal: controller.signal,
         headers: { Accept: 'text/html' }, referrerPolicy: 'no-referrer',
       });
       const resolvedIdentity = identityFromUrl(response.url, req.platform);
@@ -79,8 +91,13 @@ async function resolveMetadata(req: ResolveRequest): Promise<VideoMetadata | nul
       }
     } catch { /* Timeout, login gate, network error: metadata stays unavailable. */ }
     finally { clearTimeout(timeout); }
-    await chrome.storage.local.set({ [cacheKey]: { timestamp: Date.now(), metadata } satisfies CacheEntry });
-    return metadata;
+    const timestamp = Date.now();
+    await chrome.storage.local.set({ [cacheKey]: { timestamp, metadata } satisfies CacheEntry });
+    return {
+      metadata,
+      status: metadata ? 'resolved' as const : 'unavailable' as const,
+      retry_after: timestamp + cacheLifetime(metadata),
+    };
   });
   pending.set(cacheKey, promise);
   try { return await promise; } finally { pending.delete(cacheKey); }
@@ -88,6 +105,6 @@ async function resolveMetadata(req: ResolveRequest): Promise<VideoMetadata | nul
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, respond: (value: ResolveResponse) => void) => {
   if (!validMessage(message)) return false;
-  void resolveMetadata(message).then((metadata) => respond({ metadata })).catch(() => respond({ metadata: null }));
+  void resolveMetadata(message).then(respond).catch(() => respond({ metadata: null, status: 'unavailable' }));
   return true;
 });

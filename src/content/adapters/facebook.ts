@@ -14,7 +14,11 @@ export const facebook = {
       const text = candidate.tile.textContent?.trim();
       if (hasEye && text && /^\d[\d,.]*\s*[KMB]?$/i.test(text)) {
         const { value, exact } = parseMetric(text);
-        if (value !== null) { candidate.metadata.views = value; candidate.metadata.views_exact = exact; }
+        if (value !== null) {
+          candidate.metadata.views = value;
+          candidate.metadata.views_exact = exact;
+          candidate.metadata.views_source = 'tile';
+        }
       }
     }
     return candidates;

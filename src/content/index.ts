@@ -2,22 +2,23 @@ import { instagram } from './adapters/instagram';
 import { tiktok } from './adapters/tiktok';
 import { facebook } from './adapters/facebook';
 import { contextFromUrl, identityFromUrl } from '../shared/urls';
-import { localDate, mergeMetadata, metadataFromScriptTexts } from '../shared/metadata';
+import { datePrecision, localDate, mergeMetadata, metadataFromScriptTexts } from '../shared/metadata';
 import { allSelections, removeSelection, saveSelection, selectionKey, updateSelectedMetadata, SELECTED_PREFIX } from '../shared/storage';
 import type { Candidate, PageContext, ResolveRequest, ResolveResponse, VideoMetadata, VideoRecord } from '../shared/types';
 
 const adapters = { Instagram: instagram, TikTok: tiktok, Facebook: facebook };
 const overlays = new Map<HTMLAnchorElement, Overlay>();
 const selected = new Map<string, VideoRecord>();
-const requested = new Set<string>();
+const nextAttempt = new Map<string, number>();
 const structuredCache = new Map<string, VideoMetadata>();
 let scripts: string[] = [];
-let fallbackCount = 0;
+let fallbackInFlight = false;
 let currentHref = '';
 let lastProfile: { platform: string; username: string } | null = null;
 let scanScheduled = false;
 let pageObserver: MutationObserver | null = null;
 let locationPoll: number | null = null;
+let retryTimer: number | null = null;
 
 interface Overlay {
   anchor: HTMLAnchorElement;
@@ -44,6 +45,10 @@ function candidateRecord(candidate: Candidate, ctx: PageContext): VideoRecord {
     platform: ctx.platform, username, video_id: candidate.identity.id, video_url: candidate.identity.url,
     caption: m.caption ?? null, published_at: m.published_at ?? null,
     published_date: m.published_date ?? null,
+    published_relative: m.published_relative ?? null,
+    published_label: m.published_label ?? null,
+    date_precision: datePrecision(m), date_source: m.date_source ?? null,
+    views_source: m.views_source ?? null,
     views: m.views ?? null, views_exact: m.views_exact ?? null,
     likes: m.likes ?? null, likes_exact: m.likes_exact ?? null,
     comments: m.comments ?? null, comments_exact: m.comments_exact ?? null,
@@ -51,18 +56,25 @@ function candidateRecord(candidate: Candidate, ctx: PageContext): VideoRecord {
   };
 }
 
+function mergeRecord(record: VideoRecord, ...parts: VideoMetadata[]): VideoRecord {
+  const metadata = mergeMetadata(record, ...parts);
+  return { ...record, ...metadata, date_precision: datePrecision(metadata) };
+}
+
 function render(overlay: Overlay): void {
   const key = selectionKey(overlay.record);
   const existing = selected.get(key);
-  const { short, full } = localDate(overlay.record.published_at, overlay.record.published_date);
+  const { short, full } = localDate(overlay.record.published_at, overlay.record.published_date, overlay.record.published_relative, overlay.record.published_label ?? null);
   if (overlay.date.textContent !== short) overlay.date.textContent = short;
-  overlay.date.title = full;
+  overlay.date.title = `${full}${overlay.record.date_source ? ` (source: ${overlay.record.date_source})` : ''}`;
+  overlay.host.dataset.tvmDateSource = overlay.record.date_source ?? 'unavailable';
   const count = overlay.record.views;
   const viewsText = count === null ? 'Views unavailable' :
     `${overlay.record.views_exact === false ? '≈ ' : ''}${String(count)} views`;
   if (overlay.views.textContent !== viewsText) overlay.views.textContent = viewsText;
   overlay.views.title = count === null ? 'No public view count found' :
-    overlay.record.views_exact === false ? 'Abbreviated count from page (not exact)' : 'Exact count from page metadata';
+    `${overlay.record.views_exact === false ? 'Abbreviated count (not exact)' : 'Exact count'}${overlay.record.views_source ? ` (source: ${overlay.record.views_source})` : ''}`;
+  overlay.host.dataset.tvmViewsSource = overlay.record.views_source ?? 'unavailable';
   const pressed = !!existing;
   overlay.selection.setAttribute('aria-pressed', String(pressed));
   if (overlay.selection.textContent !== (pressed ? '✓' : '+')) overlay.selection.textContent = pressed ? '✓' : '+';
@@ -115,6 +127,7 @@ function createOverlay(candidate: Candidate, record: VideoRecord): Overlay {
       void saveSelection(toStore);
     }
     for (const item of overlays.values()) if (selectionKey(item.record) === key) render(item);
+    pumpFallback();
   });
   // Prevent parent sites listening for mousedown/pointerdown from navigating.
   for (const eventName of ['pointerdown', 'mousedown', 'mouseup', 'pointerup', 'dblclick']) {
@@ -134,23 +147,61 @@ function removeOverlay(overlay: Overlay): void {
   overlays.delete(overlay.anchor);
 }
 
+function needsFallback(record: VideoRecord): boolean {
+  return (!record.published_at || record.views === null) && !!record.video_url;
+}
+
+function visible(tile: HTMLElement): boolean {
+  const rect = tile.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
+}
+
+function pumpFallback(): void {
+  if (fallbackInFlight) return;
+  const eligible = Array.from(overlays.values())
+    .filter((overlay) => needsFallback(overlay.record) &&
+      (selected.has(selectionKey(overlay.record)) || visible(overlay.tile)))
+    .sort((a, b) => Number(selected.has(selectionKey(b.record))) - Number(selected.has(selectionKey(a.record))));
+  const overlay = eligible.find((item) =>
+    (nextAttempt.get(selectionKey(item.record)) ?? 0) <= Date.now());
+  if (retryTimer !== null) window.clearTimeout(retryTimer);
+  retryTimer = null;
+  if (!overlay) {
+    const next = Math.min(...eligible.map((item) => nextAttempt.get(selectionKey(item.record)) ?? Infinity));
+    if (Number.isFinite(next)) retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      pumpFallback();
+    }, Math.max(1000, next - Date.now()));
+    return;
+  }
+  fallbackInFlight = true;
+  void fallback(overlay).finally(() => {
+    fallbackInFlight = false;
+    pumpFallback();
+  });
+}
+
 async function fallback(overlay: Overlay): Promise<void> {
   const { platform, video_id, video_url } = overlay.record;
-  const key = `${platform}:${video_id}`;
-  if (requested.has(key) || fallbackCount >= 10) return;
-  requested.add(key);
-  fallbackCount += 1;
+  const key = selectionKey(overlay.record);
+  // Prevent simultaneous scans from enqueuing repeated requests for the same video.
+  nextAttempt.set(key, Date.now() + 5 * 60_000);
   try {
     const request: ResolveRequest = { type: 'resolve-metadata', platform, id: video_id, url: video_url };
     const response = await chrome.runtime.sendMessage<ResolveRequest, ResolveResponse>(request);
+    if (response?.retry_after) nextAttempt.set(key, Math.max(Date.now() + 30_000, response.retry_after));
+    else nextAttempt.set(key, Date.now() + (response?.metadata ? 30 * 60_000 : 6 * 60 * 60_000));
     if (!response?.metadata) return;
     for (const item of overlays.values()) {
-      if (`${item.record.platform}:${item.record.video_id}` !== key) continue;
-      item.record = { ...item.record, ...mergeMetadata(item.record, response.metadata) };
+      if (selectionKey(item.record) !== key) continue;
+      item.record = mergeRecord(item.record, response.metadata);
+      item.host.dataset.tvmFetchStatus = response.status ?? 'resolved';
       render(item);
       if (selected.has(selectionKey(item.record))) void updateSelectedMetadata(item.record, response.metadata);
     }
-  } catch { /* e.g. extension reloaded; leave unavailable fields empty. */ }
+  } catch {
+    nextAttempt.set(key, Date.now() + 5 * 60_000);
+  }
 }
 
 function refreshScripts(): void {
@@ -165,8 +216,6 @@ function scan(): void {
   const ctx = contextFromUrl(location.href);
   if (currentHref !== location.href) {
     currentHref = location.href;
-    requested.clear();
-    fallbackCount = 0;
     refreshScripts();
     if (ctx?.kind === 'profile') lastProfile = { platform: ctx.platform, username: ctx.username };
     for (const overlay of Array.from(overlays.values())) removeOverlay(overlay);
@@ -196,16 +245,22 @@ function scan(): void {
     const selectedRecord = selected.get(selectionKey(record));
     const overlay = overlays.get(candidate.anchor);
     if (overlay) {
-      overlay.record = { ...record, ...mergeMetadata(record, overlay.record, selectedRecord ?? {}) };
+      overlay.record = mergeRecord(record, selectedRecord ?? {}, overlay.record, record);
       render(overlay);
     } else {
-      const ready = { ...record, ...mergeMetadata(record, selectedRecord ?? {}) };
+      const ready = mergeRecord(record, selectedRecord ?? {}, record);
       const added = createOverlay(candidate, ready);
       overlays.set(candidate.anchor, added);
     }
     const active = overlays.get(candidate.anchor)!;
-    if (!active.record.published_at) void fallback(active);
+    if (selectedRecord) {
+      const fresh = mergeMetadata(selectedRecord, active.record);
+      if (JSON.stringify(fresh) !== JSON.stringify(mergeMetadata(selectedRecord))) {
+        void updateSelectedMetadata(active.record, fresh);
+      }
+    }
   }
+  pumpFallback();
 }
 
 function scheduleScan(): void {
@@ -253,6 +308,8 @@ async function initialize(): Promise<void> {
   pageObserver.observe(document.documentElement, { subtree: true, childList: true });
   window.addEventListener('popstate', scheduleScan);
   window.addEventListener('hashchange', scheduleScan);
+  window.addEventListener('scroll', scheduleScan, { capture: true, passive: true });
+  window.addEventListener('resize', scheduleScan);
   // SPA history changes don't always emit popstate.
   locationPoll = window.setInterval(() => { if (location.href !== currentHref) scheduleScan(); }, 900);
   scheduleScan();
@@ -262,6 +319,11 @@ async function initialize(): Promise<void> {
 export function stopTracking(): void {
   pageObserver?.disconnect();
   if (locationPoll !== null) window.clearInterval(locationPoll);
+  if (retryTimer !== null) window.clearTimeout(retryTimer);
+  window.removeEventListener('popstate', scheduleScan);
+  window.removeEventListener('hashchange', scheduleScan);
+  window.removeEventListener('scroll', scheduleScan, true);
+  window.removeEventListener('resize', scheduleScan);
   for (const item of Array.from(overlays.values())) removeOverlay(item);
 }
 
