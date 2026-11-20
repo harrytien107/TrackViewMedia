@@ -49,13 +49,18 @@ describe('tab-origin metadata fallback', () => {
     vi.unstubAllGlobals();
   });
 
-  it('does not consume a second request when the page already returned valid HTML without a date', async () => {
+  it('tries the alternate response when the tab HTML has no date', async () => {
     vi.resetModules();
     const state: Record<string, unknown> = {};
     let listener: ((request: unknown, sender: chrome.runtime.MessageSender,
       respond: (value: unknown) => void) => boolean) | undefined;
     const pageFetch = vi.fn(async () => ({ metadata: { views: 100 }, diagnostic: 'no_video_date' }));
-    const backgroundFetch = vi.fn();
+    const backgroundFetch = vi.fn(async () => ({
+      ok: true,
+      url: 'https://www.instagram.com/reel/DFHmVC0zHkj/',
+      headers: { get: (name: string) => name.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null },
+      text: async () => '<meta property="og:description" content="Video by Ssam Korean BBQ on January 21, 2025.">',
+    }));
     vi.stubGlobal('fetch', backgroundFetch);
     vi.stubGlobal('chrome', {
       tabs: { sendMessage: pageFetch },
@@ -71,13 +76,14 @@ describe('tab-origin metadata fallback', () => {
       url: 'https://www.instagram.com/reel/DFHmVC0zHkj/',
     };
     const sender = { tab: { id: 15 }, url: 'https://www.instagram.com/ssam_kbbq/reels/' } as chrome.runtime.MessageSender;
-    const result = await new Promise<{ metadata: { views: number }; status: string }>((resolve) =>
+    const result = await new Promise<{ metadata: { views: number; published_date: string }; status: string }>((resolve) =>
       listener?.(message, sender, resolve as (value: unknown) => void));
 
     expect(result.status).toBe('resolved');
     expect(result.metadata.views).toBe(100);
+    expect(result.metadata.published_date).toBe('2025-01-21');
     expect(pageFetch).toHaveBeenCalledOnce();
-    expect(backgroundFetch).not.toHaveBeenCalled();
+    expect(backgroundFetch).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
 });

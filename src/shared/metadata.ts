@@ -470,8 +470,11 @@ export function metadataFromVideoHtml(html: string, id: string, platform: Platfo
   if (platform === 'Instagram' && !part.published_at && !part.published_date) {
     // Instagram's single-Reel OG attribution can provide the publication day
     // even when the server response omits its exact timestamp.
-    const attribution = meta['og:description']?.match(
+    const description = meta['og:description'];
+    const attribution = description?.match(
       /(?:^|\s)-\s+[\w.]+\s+on\s+([a-z]+\s+\d{1,2},\s*\d{4})(?=\s*:)/i,
+    ) ?? description?.match(
+      /^Video by .+?\s+on\s+([a-z]+\s+\d{1,2},\s*\d{4})(?=\s*[.:]|\s*$)/i,
     );
     if (attribution) part.published_date = verifiedCalendarDate(attribution[1]) ?? undefined;
   }

@@ -3,7 +3,7 @@ import { datePrecision, mergeMetadata, metadataFromVideoHtml, verifiedCalendarDa
 import type { PageFetchRequest, PageFetchResponse, ResolveRequest, ResolveResponse, VideoMetadata } from '../shared/types';
 
 // A new cache namespace retries missing dates after upgrading the lookup strategy.
-const CACHE_PREFIX = 'metadata:v2:';
+const CACHE_PREFIX = 'metadata:v3:';
 const RATE_KEY = 'metadata_request_history';
 const POSITIVE_TTL = 7 * 24 * 60 * 60_000;
 const PARTIAL_TTL = 10 * 60_000;
@@ -70,13 +70,15 @@ async function resolveMetadata(req: ResolveRequest, sender: chrome.runtime.Messa
   const promise = queue(async () => {
     let metadata: VideoMetadata | null = null;
     let diagnostic = 'no_matching_metadata';
-    let pageLookupSucceeded = false;
+    let pageLookupHasDate = false;
+    let requestReserved = false;
     const pageUrl = sender.url ? new URL(sender.url) : null;
     if (sender.tab?.id !== undefined && pageUrl && platformForUrl(pageUrl) === req.platform) {
       const retryAfter = await reserveRequest();
       if (retryAfter !== null) {
         return { metadata: null, status: 'rate_limited' as const, diagnostic: 'request_limit_reached', retry_after: retryAfter };
       }
+      requestReserved = true;
       try {
         const request: PageFetchRequest = { type: 'fetch-video-from-page', platform: req.platform, id: req.id, url: req.url };
         const result = await Promise.race([
@@ -85,18 +87,22 @@ async function resolveMetadata(req: ResolveRequest, sender: chrome.runtime.Messa
         ]);
         metadata = result?.metadata ?? null;
         diagnostic = `page:${result?.diagnostic ?? 'no_response'}`;
-        pageLookupSucceeded = result?.diagnostic === 'no_video_date' || result?.diagnostic === 'matched_video_date';
+        pageLookupHasDate = !!metadata && !!datePrecision(metadata);
       } catch {
         diagnostic = 'page:unavailable';
       }
     }
 
-    // A completed page-origin lookup already inspected the video HTML. Do not
-    // spend a second request on the same video while other tiles are waiting.
-    if (!pageLookupSucceeded && (!metadata || !datePrecision(metadata))) {
-      const retryAfter = await reserveRequest();
-      if (retryAfter !== null) {
-        return { metadata, status: 'rate_limited' as const, diagnostic: 'request_limit_reached', retry_after: retryAfter };
+    // Signed-in page HTML can differ from the extension-origin response. If the
+    // tab lookup found no date, try the alternate response before caching the
+    // record as incomplete. One video resolution consumes one rate-limit slot.
+    if (!pageLookupHasDate && (!metadata || !datePrecision(metadata))) {
+      if (!requestReserved) {
+        const retryAfter = await reserveRequest();
+        if (retryAfter !== null) {
+          return { metadata, status: 'rate_limited' as const, diagnostic: 'request_limit_reached', retry_after: retryAfter };
+        }
+        requestReserved = true;
       }
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8000);

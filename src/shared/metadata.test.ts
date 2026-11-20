@@ -171,6 +171,13 @@ describe('metadata extraction', () => {
     expect(result.published_at).toBeUndefined();
   });
 
+  it('reads Instagram publication day from the Video by OG description', () => {
+    const html = `<meta property="og:description" content="Video by Ssam Korean BBQ on January 21, 2025.">`;
+    const result = metadataFromVideoHtml(html, 'DFHmVC0zHkj', 'Instagram');
+    expect(result).toMatchObject({ published_date: '2025-01-21', date_source: 'video_page' });
+    expect(result.published_at).toBeUndefined();
+  });
+
   it('ignores caption dates without Instagram publication attribution', () => {
     const html = `<meta property="og:description" content="Try our January 21, 2025 menu - ssam_kbbq restaurant">`;
     const result = metadataFromVideoHtml(html, 'DFHmVC0zHkj', 'Instagram');
