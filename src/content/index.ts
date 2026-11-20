@@ -13,7 +13,7 @@ const verified = new Map<string, VideoMetadata>();
 const nextAttempt = new Map<string, number>();
 const structuredCache = new Map<string, VideoMetadata>();
 const parsedScripts = new Map<string, unknown>();
-const SCRIPT_SELECTOR = 'script[type="application/json"], script[id="SIGI_STATE"], script[id="__NEXT_DATA__"], script[id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]';
+const SCRIPT_SELECTOR = 'script:not([src])';
 let scripts: string[] = [];
 let fallbackInFlight = false;
 let currentHref = '';
@@ -22,6 +22,9 @@ let scanScheduled = false;
 let pageObserver: MutationObserver | null = null;
 let locationPoll: number | null = null;
 let retryTimer: number | null = null;
+let verificationTimer: number | null = null;
+let verificationInFlight = false;
+let verificationPending = false;
 
 interface Overlay {
   anchor: HTMLAnchorElement;
@@ -211,23 +214,32 @@ async function fallback(overlay: Overlay): Promise<void> {
     const response = await chrome.runtime.sendMessage<ResolveRequest, ResolveResponse>(request);
     if (response?.retry_after) nextAttempt.set(key, Math.max(Date.now() + 30_000, response.retry_after));
     else nextAttempt.set(key, Date.now() + (response?.metadata ? 30 * 60_000 : 6 * 60 * 60_000));
-    if (!response?.metadata) return;
     for (const item of overlays.values()) {
       if (selectionKey(item.record) !== key) continue;
-      item.record = mergeRecord(item.record, response.metadata, verified.get(verifiedKey(item.record)) ?? {});
-      item.host.dataset.tvmFetchStatus = response.status ?? 'resolved';
+      item.host.dataset.tvmFetchStatus = [response?.status ?? 'no_response', response?.diagnostic].filter(Boolean).join(' / ');
+      if (response?.metadata) {
+        item.record = mergeRecord(item.record, response.metadata, verified.get(verifiedKey(item.record)) ?? {});
+      }
       render(item);
-      if (selected.has(selectionKey(item.record))) {
+      if (response?.metadata && selected.has(selectionKey(item.record))) {
         void updateSelectedMetadata(item.record, mergeMetadata(response.metadata, verified.get(verifiedKey(item.record)) ?? {}));
       }
     }
-  } catch {
+  } catch (error) {
     nextAttempt.set(key, Date.now() + 5 * 60_000);
+    for (const item of overlays.values()) {
+      if (selectionKey(item.record) !== key) continue;
+      item.host.dataset.tvmFetchStatus = error instanceof Error ? error.name : 'message_error';
+      render(item);
+    }
   }
 }
 
 function refreshScripts(): void {
   const updated = Array.from(document.querySelectorAll<HTMLScriptElement>(SCRIPT_SELECTOR))
+    .filter((script) => script.type === 'application/json' ||
+      ['SIGI_STATE', '__NEXT_DATA__', '__UNIVERSAL_DATA_FOR_REHYDRATION__'].includes(script.id) ||
+      (script.textContent?.includes('ScheduledServerJS') ?? false))
     .map((script) => script.textContent ?? '').filter((text) => text.length < 2_000_000);
   if (updated.length === scripts.length && updated.every((text, index) => text === scripts[index])) return;
   const previous = new Set(scripts);
@@ -293,6 +305,26 @@ async function verifyCurrentVideo(): Promise<{
   };
 }
 
+function scheduleAutoVerification(): void {
+  if (contextFromUrl(location.href)?.kind !== 'video') return;
+  if (verificationInFlight) {
+    verificationPending = true;
+    return;
+  }
+  if (verificationTimer !== null) return;
+  verificationTimer = window.setTimeout(() => {
+    verificationTimer = null;
+    verificationInFlight = true;
+    void verifyCurrentVideo().catch(() => null).finally(() => {
+      verificationInFlight = false;
+      if (verificationPending) {
+        verificationPending = false;
+        scheduleAutoVerification();
+      }
+    });
+  }, 150);
+}
+
 function scan(): void {
   scanScheduled = false;
   const ctx = contextFromUrl(location.href);
@@ -301,6 +333,7 @@ function scan(): void {
     refreshScripts();
     if (ctx?.kind === 'profile') lastProfile = { platform: ctx.platform, username: ctx.username };
     for (const overlay of Array.from(overlays.values())) removeOverlay(overlay);
+    scheduleAutoVerification();
   }
   if (!ctx) {
     for (const overlay of Array.from(overlays.values())) removeOverlay(overlay);
@@ -396,13 +429,19 @@ async function initialize(): Promise<void> {
   });
   pageObserver = new MutationObserver((records) => {
     const scriptsChanged = records.some((record) =>
-      (record.target instanceof HTMLScriptElement && record.target.matches(SCRIPT_SELECTOR)) ||
+      (record.target instanceof Element && record.target.matches(SCRIPT_SELECTOR)) ||
       (record.type === 'characterData' && record.target.parentElement?.matches(SCRIPT_SELECTOR)) ||
       (record.type === 'childList' && Array.from(record.addedNodes).some((node) =>
-        (node instanceof HTMLScriptElement && node.matches(SCRIPT_SELECTOR)) ||
+        (node instanceof Element && node.matches(SCRIPT_SELECTOR)) ||
         (node instanceof Element && !!node.querySelector(SCRIPT_SELECTOR)))),
     );
     if (scriptsChanged) refreshScripts();
+    if (scriptsChanged || (contextFromUrl(location.href)?.kind === 'video' && records.some((record) =>
+      Array.from(record.addedNodes).some((node) => node instanceof Element && (
+        node.matches('time, meta, [data-e2e*="time" i], [data-testid*="publish" i]') ||
+        !!node.querySelector('time, meta, [data-e2e*="time" i], [data-testid*="publish" i]')))))) {
+      scheduleAutoVerification();
+    }
     scheduleScan();
   });
   pageObserver.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
@@ -412,6 +451,7 @@ async function initialize(): Promise<void> {
   window.addEventListener('resize', scheduleScan);
   // SPA history changes don't always emit popstate.
   locationPoll = window.setInterval(() => { if (location.href !== currentHref) scheduleScan(); }, 900);
+  scheduleAutoVerification();
   scheduleScan();
 }
 
@@ -420,6 +460,7 @@ export function stopTracking(): void {
   pageObserver?.disconnect();
   if (locationPoll !== null) window.clearInterval(locationPoll);
   if (retryTimer !== null) window.clearTimeout(retryTimer);
+  if (verificationTimer !== null) window.clearTimeout(verificationTimer);
   window.removeEventListener('popstate', scheduleScan);
   window.removeEventListener('hashchange', scheduleScan);
   window.removeEventListener('scroll', scheduleScan, true);

@@ -3,6 +3,7 @@ node_modules/
 .e2e-chrome/
 .screenshots/
 dist/
+dist-firefox/
 .vite/
 coverage/
 *.log

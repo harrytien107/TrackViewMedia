@@ -83,6 +83,16 @@ describe('metadata extraction', () => {
     expect(fromTile.published_at).toBeUndefined();
   });
 
+  it('reads an ID-matched TikTok video inside a string-encoded hydration payload', () => {
+    const json = JSON.stringify({ payload: JSON.stringify({ videoDetail: {
+      itemInfo: { itemStruct: { id: '123', createTime: 1792548672, stats: { playCount: 321 } } },
+    } }) });
+    expect(metadataFromScriptTexts([json], '123', 'TikTok')).toMatchObject({
+      published_at: '2026-10-21T02:11:12.000Z', views: 321,
+    });
+    expect(metadataFromScriptTexts([json], '456', 'TikTok').published_at).toBeUndefined();
+  });
+
   it('preserves TikTok month-and-day labels when the platform omits the year', () => {
     const tile = document.createElement('a');
     tile.innerHTML = '<span data-e2e="video-create-time">Nov 18</span>';
@@ -122,6 +132,16 @@ describe('metadata extraction', () => {
       .toBe('2026-10-21T02:11:12.000Z');
   });
 
+  it('finds the correct VideoObject in a JSON-LD @graph', () => {
+    const graph = { '@graph': [
+      { '@type': 'VideoObject', url: 'https://www.facebook.com/reel/999', uploadDate: '2026-10-20T09:11:12Z' },
+      { '@type': 'VideoObject', url: 'https://www.facebook.com/reel/123', uploadDate: '2026-10-21T09:11:12Z' },
+    ] };
+    const html = `<script type="application/ld+json">${JSON.stringify(graph)}</script>`;
+    expect(metadataFromVideoHtml(html, '123', 'Facebook').published_at).toBe('2026-10-21T09:11:12.000Z');
+    expect(metadataFromVideoHtml(html, '456', 'Facebook').published_at).toBeUndefined();
+  });
+
   it('matches an Instagram Reel post date without using comment timestamps', () => {
     const html = `<meta property="og:description" content="49 likes - user on January 21, 2025: hello">
       <a href="/p/DFHmVC0zHkj/c/18084466375592057/"><time datetime="2025-02-14T12:34:46.000Z">February 14, 2025</time></a>
@@ -155,6 +175,15 @@ describe('metadata extraction', () => {
       .toBe('2026-03-19T00:05:25.000Z');
   });
 
+  it('uses the creation story of an ID-matched Facebook video', () => {
+    const data = { edges: [{ node: { id: '1130192402541878',
+      creation_story: { creation_time: 1773878725 },
+    } }, { node: { id: '999', creation_story: { creation_time: 1792548672 } } }] };
+    expect(metadataFromStructuredData(data, '1130192402541878', 'Facebook').published_at)
+      .toBe('2026-03-19T00:05:25.000Z');
+    expect(metadataFromStructuredData(data, '456', 'Facebook').published_at).toBeUndefined();
+  });
+
   it('reads a Facebook profile Reel date from the story direct video ID', () => {
     const data = { all_collections: { nodes: [{ style_renderer: { collection: {
       aggregated_fb_shorts: { edges: [{ profile_reel_node: { node: {
@@ -180,6 +209,19 @@ describe('metadata extraction', () => {
     expect(metadataFromStructuredData(data, '1130192402541878', 'Facebook').published_at)
       .toBe('2026-03-19T00:05:25.000Z');
     expect(metadataFromStructuredData(data, '999', 'Facebook').published_at).toBeUndefined();
+  });
+
+  it('reads Facebook Relay script-wrapped Reel dates by ID', () => {
+    const payload = { require: [{ video: { id: '1130192402541878',
+      creation_story: { creation_time: 1773878725, video: { id: '1130192402541878' } },
+    } }, { video: { id: '999', creation_story: { creation_time: 1792548672 } } }] };
+    const script = `require("ScheduledServerJS").handle(${JSON.stringify(payload)});`;
+    expect(metadataFromScriptTexts([script], '1130192402541878', 'Facebook').published_at)
+      .toBe('2026-03-19T00:05:25.000Z');
+    expect(metadataFromVideoHtml(`<script>${script}</script>`, '1130192402541878', 'Facebook').published_at)
+      .toBe('2026-03-19T00:05:25.000Z');
+    expect(metadataFromVideoHtml(`<script>${script}</script>`, '456', 'Facebook').published_at)
+      .toBeUndefined();
   });
 
   it('extracts only tile-scoped view counts', () => {

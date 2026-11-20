@@ -255,8 +255,16 @@ export function metadataFromStructuredData(data: unknown, id: string, platform: 
   const stack: unknown[] = [data];
   const seen = new Set<object>();
   let visited = 0;
+  let decodedStrings = 0;
   while (stack.length && visited++ < 45_000) {
     const value = stack.pop();
+    if (typeof value === 'string' && decodedStrings < 30 && value.length < 500_000 &&
+        value.includes(id) && /^[\s]*[\[{]/.test(value)) {
+      try {
+        stack.push(JSON.parse(value));
+        decodedStrings += 1;
+      } catch { /* String payload is not structured JSON. */ }
+    }
     if (!value || typeof value !== 'object' || seen.has(value)) continue;
     seen.add(value);
     if (Array.isArray(value)) { for (const child of value) if (typeof child === 'object') stack.push(child); continue; }
@@ -264,6 +272,13 @@ export function metadataFromStructuredData(data: unknown, id: string, platform: 
     const ids = [node.id, node.videoId, node.video_id, node.shortcode, node.code, node.pk, node.media_id];
     if (ids.some((n) => typeof n === 'string' || typeof n === 'number' ? String(n) === id : false)) {
       parts.push(extractItem(node, platform));
+      if (platform === 'Facebook' && node.creation_story && typeof node.creation_story === 'object' &&
+          !Array.isArray(node.creation_story)) {
+        const story = node.creation_story as Record<string, unknown>;
+        // The matched video owns this creation story. Reject a story explicitly
+        // tied to a different video (for example in a recommendation payload).
+        if (!facebookStoryHasConflictingVideo(story, id)) parts.push(extractItem(story, platform));
+      }
     }
     if (platform === 'Facebook' && node.creation_time !== undefined && facebookStoryMatchesVideo(node, id)) {
       parts.push(extractItem(node, platform));
@@ -273,10 +288,26 @@ export function metadataFromStructuredData(data: unknown, id: string, platform: 
       if (key === id && child && typeof child === 'object' && !Array.isArray(child)) {
         parts.push(extractItem(child as Record<string, unknown>, platform));
       }
-      if (child && typeof child === 'object') stack.push(child);
+      if (child && (typeof child === 'object' ||
+          (typeof child === 'string' && child.includes(id) && /^[\s]*[\[{]/.test(child)))) {
+        stack.push(child);
+      }
     }
   }
   return mergeMetadata(...parts);
+}
+
+function facebookStoryHasConflictingVideo(story: Record<string, unknown>, id: string): boolean {
+  const videoIds: unknown[] = [];
+  if (story.video && typeof story.video === 'object') videoIds.push((story.video as Record<string, unknown>).id);
+  const context = story.short_form_video_context;
+  if (context && typeof context === 'object') {
+    for (const key of ['playback_video', 'video']) {
+      const video = (context as Record<string, unknown>)[key];
+      if (video && typeof video === 'object') videoIds.push((video as Record<string, unknown>).id);
+    }
+  }
+  return videoIds.some((value) => value !== undefined && value !== null && String(value) !== id);
 }
 
 export function metadataFromScriptTexts(
@@ -289,7 +320,8 @@ export function metadataFromScriptTexts(
   const remainder = matches.filter((text) => !hasDateField.test(text));
   for (const text of [...priority, ...remainder].slice(0, 100)) {
     try {
-      const raw = text.replace(/^for\s*\(;;\)\s*;?\s*/, '');
+      const raw = unwrapScriptJson(text);
+      if (!raw) continue;
       let data: unknown;
       if (parsedCache?.has(raw)) data = parsedCache.get(raw);
       else {
@@ -301,6 +333,16 @@ export function metadataFromScriptTexts(
     } catch { /* invalid JSON, skip */ }
   }
   return withSource(found, 'embedded');
+}
+
+/** Facebook embeds Relay JSON inside ScheduledServerJS.handle(...). */
+function unwrapScriptJson(text: string): string | null {
+  const raw = text.trim().replace(/^for\s*\(;;\)\s*;?\s*/, '');
+  if (raw.startsWith('{') || raw.startsWith('[')) return raw;
+  const wrapped = raw.match(/(?:^|\.)handle\s*\(\s*([\s\S]+)\s*\)\s*;?\s*$/);
+  if (!wrapped) return null;
+  const argument = wrapped[1].trim();
+  return argument.startsWith('{') || argument.startsWith('[') ? argument : null;
 }
 
 function decodeEntities(value: string): string {
@@ -437,10 +479,16 @@ export function metadataFromVideoHtml(html: string, id: string, platform: Platfo
     if (attrs.type === 'application/ld+json') {
       try {
         const data: unknown = JSON.parse(text);
-        const items = Array.isArray(data) ? data : [data];
-        for (const item of items) {
+        const items: unknown[] = [data];
+        let visited = 0;
+        while (items.length && visited++ < 200) {
+          const item = items.pop();
+          if (Array.isArray(item)) { items.push(...item); continue; }
           if (!item || typeof item !== 'object') continue;
           const obj = item as Record<string, unknown>;
+          for (const nested of ['@graph', 'mainEntity', 'video', 'itemListElement']) {
+            if (obj[nested] && typeof obj[nested] === 'object') items.push(obj[nested]);
+          }
           if (obj['@type'] !== 'VideoObject' && !(Array.isArray(obj['@type']) && obj['@type'].includes('VideoObject'))) continue;
           // JSON-LD can mention suggested videos, so require an explicit match.
           if (!jsonLdMatchesVideo(obj, id, platform)) continue;
@@ -451,9 +499,11 @@ export function metadataFromVideoHtml(html: string, id: string, platform: Platfo
           });
         }
       } catch { /* invalid JSON-LD */ }
-    } else if ((attrs.id && /SIGI_STATE|NEXT_DATA|UNIVERSAL_DATA_FOR_REHYDRATION/i.test(attrs.id)) || attrs.type === 'application/json') {
+    } else if ((attrs.id && /SIGI_STATE|NEXT_DATA|UNIVERSAL_DATA_FOR_REHYDRATION/i.test(attrs.id)) || attrs.type === 'application/json' ||
+      (platform === 'Facebook' && text.includes('ScheduledServerJS'))) {
       if (text.includes(id)) {
-        try { out.push(metadataFromStructuredData(JSON.parse(text), id, platform)); } catch { /* ignore */ }
+        const embedded = metadataFromScriptTexts([text], id, platform);
+        if (Object.keys(embedded).length) out.push(embedded);
       }
     }
   }

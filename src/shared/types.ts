@@ -62,6 +62,7 @@ export type ResolveRequest = {
 export type ResolveResponse = {
   metadata: VideoMetadata | null;
   status?: 'resolved' | 'cached' | 'unavailable' | 'rate_limited';
+  diagnostic?: string;
   /** Epoch milliseconds when requesting this video again is useful. */
   retry_after?: number;
 };

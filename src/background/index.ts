@@ -5,8 +5,8 @@ import type { ResolveRequest, ResolveResponse, VideoMetadata } from '../shared/t
 const CACHE_PREFIX = 'metadata:';
 const RATE_KEY = 'metadata_request_history';
 const POSITIVE_TTL = 7 * 24 * 60 * 60_000;
-const PARTIAL_TTL = 20 * 60_000;
-const NEGATIVE_TTL = 30 * 60_000;
+const PARTIAL_TTL = 10 * 60_000;
+const NEGATIVE_TTL = 15 * 60_000;
 const WINDOW_MS = 5 * 60_000;
 const MAX_PER_WINDOW = 12;
 const MIN_GAP_MS = 2500;
@@ -14,7 +14,7 @@ let work = Promise.resolve();
 let lastRequest = 0;
 const pending = new Map<string, Promise<ResolveResponse>>();
 
-type CacheEntry = { timestamp: number; metadata: VideoMetadata | null };
+type CacheEntry = { timestamp: number; metadata: VideoMetadata | null; diagnostic?: string };
 
 export function cacheLifetime(metadata: VideoMetadata | null): number {
   if (!metadata) return NEGATIVE_TTL;
@@ -45,7 +45,8 @@ async function resolveMetadata(req: ResolveRequest): Promise<ResolveResponse> {
   const cacheKey = `${CACHE_PREFIX}${req.platform}:${req.id}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey] as CacheEntry | undefined;
   if (cached && Date.now() - cached.timestamp < cacheLifetime(cached.metadata)) {
-    return { metadata: cached.metadata, status: 'cached', retry_after: cached.timestamp + cacheLifetime(cached.metadata) };
+    return { metadata: cached.metadata, status: 'cached', diagnostic: cached.diagnostic,
+      retry_after: cached.timestamp + cacheLifetime(cached.metadata) };
   }
   const existing = pending.get(cacheKey);
   if (existing) return existing;
@@ -56,7 +57,8 @@ async function resolveMetadata(req: ResolveRequest): Promise<ResolveResponse> {
       ? (state[RATE_KEY] as number[]).filter((time) => now - time < WINDOW_MS && time <= now)
       : [];
     if (timestamps.length >= MAX_PER_WINDOW) {
-      return { metadata: null, status: 'rate_limited' as const, retry_after: timestamps[0] + WINDOW_MS + 1000 };
+      return { metadata: null, status: 'rate_limited' as const, diagnostic: 'request_limit_reached',
+        retry_after: timestamps[0] + WINDOW_MS + 1000 };
     }
     if (timestamps.length) lastRequest = Math.max(lastRequest, ...timestamps);
     const delay = Math.max(0, MIN_GAP_MS - (Date.now() - lastRequest));
@@ -66,6 +68,7 @@ async function resolveMetadata(req: ResolveRequest): Promise<ResolveResponse> {
     await chrome.storage.local.set({ [RATE_KEY]: timestamps });
 
     let metadata: VideoMetadata | null = null;
+    let diagnostic = 'no_matching_metadata';
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
@@ -85,17 +88,36 @@ async function resolveMetadata(req: ResolveRequest): Promise<ResolveResponse> {
           const ogIdentity = ogHref ? identityFromUrl(ogHref.replace(/&amp;/g, '&'), req.platform) : null;
           if (!ogHref || ogIdentity?.id === req.id) {
             const parsed = metadataFromVideoHtml(html, req.id, req.platform);
-            if (Object.values(parsed).some((v) => v !== null && v !== undefined)) metadata = parsed;
+            if (Object.values(parsed).some((v) => v !== null && v !== undefined)) {
+              metadata = parsed;
+              diagnostic = 'matched_video_metadata';
+            }
+          } else {
+            diagnostic = 'page_identity_mismatch';
           }
+        } else {
+          diagnostic = 'page_too_large';
         }
+      } else if (!response.ok) {
+        diagnostic = `http_${response.status}`;
+      } else if (resolvedIdentity?.id !== req.id) {
+        diagnostic = 'redirected_to_other_page';
+      } else if (!response.headers.get('content-type')?.includes('text/html')) {
+        diagnostic = 'non_html_response';
+      } else {
+        diagnostic = 'page_too_large';
       }
-    } catch { /* Timeout, login gate, network error: metadata stays unavailable. */ }
+    } catch (error) {
+      diagnostic = error instanceof Error && error.name === 'AbortError'
+        ? 'request_timeout' : 'network_error';
+    }
     finally { clearTimeout(timeout); }
     const timestamp = Date.now();
-    await chrome.storage.local.set({ [cacheKey]: { timestamp, metadata } satisfies CacheEntry });
+    await chrome.storage.local.set({ [cacheKey]: { timestamp, metadata, diagnostic } satisfies CacheEntry });
     return {
       metadata,
       status: metadata ? 'resolved' as const : 'unavailable' as const,
+      diagnostic,
       retry_after: timestamp + cacheLifetime(metadata),
     };
   });

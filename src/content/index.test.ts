@@ -21,7 +21,7 @@ describe('content script lifecycle (simulated public TikTok page)', () => {
     const onChanged = { addListener: vi.fn(), removeListener: vi.fn() };
     vi.stubGlobal('chrome', {
       storage: { local: storage, onChanged },
-      runtime: { sendMessage: vi.fn(async () => ({ metadata: null })), onMessage: { addListener: vi.fn() } },
+      runtime: { sendMessage: vi.fn(async () => ({ metadata: null, status: 'unavailable', diagnostic: 'no_metadata' })), onMessage: { addListener: vi.fn() } },
     });
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 0, y: 0, width: 190, height: 270, left: 0, top: 0, right: 190, bottom: 270,
@@ -51,6 +51,7 @@ describe('content script lifecycle (simulated public TikTok page)', () => {
 
     const lateOverlay = list.querySelectorAll<HTMLDivElement>('[data-track-view-media="overlay"]')[1];
     expect(lateOverlay.shadowRoot?.querySelector('.date')?.textContent).toBe('Date unavailable');
+    expect(lateOverlay.shadowRoot?.querySelector('.diagnostics')?.getAttribute('title')).toContain('no_metadata');
     for (let index = 0; index < 35; index += 1) {
       const unrelated = document.createElement('script');
       unrelated.type = 'application/json';

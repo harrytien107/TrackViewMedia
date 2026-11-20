@@ -42,6 +42,7 @@ describe('individual video verification', () => {
     shutdown = stopTracking;
     await vi.advanceTimersByTimeAsync(170);
     expect(messageHandler).toBeTruthy();
+    expect(saved['verified:TikTok:123']).toMatchObject({ published_label: 'Nov 18', date_source: 'video_page' });
 
     const result: any = await new Promise((resolve) => {
       messageHandler!({ type: 'verify-video' }, null, resolve);
