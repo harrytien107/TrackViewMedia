@@ -164,6 +164,20 @@ describe('metadata extraction', () => {
     expect(metadataFromVideoHtml(html, 'DFHmVC0zHkj', 'Instagram').published_at).toBeUndefined();
   });
 
+  it('reads Instagram publication day from verified single-Reel OG attribution', () => {
+    const html = `<meta property="og:description" content="49 likes, 2 comments - ssam_kbbq on January 21, 2025: &quot;Food reel&quot;">`;
+    const result = metadataFromVideoHtml(html, 'DFHmVC0zHkj', 'Instagram');
+    expect(result).toMatchObject({ published_date: '2025-01-21', date_source: 'video_page' });
+    expect(result.published_at).toBeUndefined();
+  });
+
+  it('ignores caption dates without Instagram publication attribution', () => {
+    const html = `<meta property="og:description" content="Try our January 21, 2025 menu - ssam_kbbq restaurant">`;
+    const result = metadataFromVideoHtml(html, 'DFHmVC0zHkj', 'Instagram');
+    expect(result.published_date).toBeUndefined();
+    expect(result.published_at).toBeUndefined();
+  });
+
   it('associates Facebook creation time with the matching Reel inside its story', () => {
     const data = { video: { id: '1130192402541878', creation_story: {
       id: 'UzpfSTYxNTc0Nzg4MjI4MTIzOlZLOjExMzAxOTI0MDI1NDE4Nzg=',

@@ -11,3 +11,73 @@ describe('metadata fallback cache', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('tab-origin metadata fallback', () => {
+  it('uses the content page to retrieve a Reel timestamp and caches the result', async () => {
+    vi.resetModules();
+    const state: Record<string, unknown> = {};
+    let listener: ((request: unknown, sender: chrome.runtime.MessageSender,
+      respond: (value: unknown) => void) => boolean) | undefined;
+    const pageFetch = vi.fn(async () => ({
+      metadata: { published_at: '2025-01-22T07:02:34.000Z', views: 41000, date_source: 'video_page' },
+      diagnostic: 'matched_video_date',
+    }));
+    const backgroundFetch = vi.fn();
+    vi.stubGlobal('fetch', backgroundFetch);
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage: pageFetch },
+      storage: { local: {
+        get: async (key: string) => ({ [key]: state[key] }),
+        set: async (entries: Record<string, unknown>) => { Object.assign(state, entries); },
+      } },
+      runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } },
+    });
+    await import('./index');
+    const message = {
+      type: 'resolve-metadata', platform: 'Instagram', id: 'DFHmVC0zHkj',
+      url: 'https://www.instagram.com/reel/DFHmVC0zHkj/',
+    };
+    const sender = { tab: { id: 15 }, url: 'https://www.instagram.com/ssam_kbbq/reels/' } as chrome.runtime.MessageSender;
+    const send = () => new Promise<unknown>((resolve) => listener?.(message, sender, resolve));
+
+    const result = await send() as { metadata: { published_at: string }; status: string };
+    expect(result.status).toBe('resolved');
+    expect(result.metadata.published_at).toBe('2025-01-22T07:02:34.000Z');
+    await send();
+    expect(pageFetch).toHaveBeenCalledTimes(1);
+    expect(backgroundFetch).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not consume a second request when the page already returned valid HTML without a date', async () => {
+    vi.resetModules();
+    const state: Record<string, unknown> = {};
+    let listener: ((request: unknown, sender: chrome.runtime.MessageSender,
+      respond: (value: unknown) => void) => boolean) | undefined;
+    const pageFetch = vi.fn(async () => ({ metadata: { views: 100 }, diagnostic: 'no_video_date' }));
+    const backgroundFetch = vi.fn();
+    vi.stubGlobal('fetch', backgroundFetch);
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage: pageFetch },
+      storage: { local: {
+        get: async (key: string) => ({ [key]: state[key] }),
+        set: async (entries: Record<string, unknown>) => { Object.assign(state, entries); },
+      } },
+      runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } },
+    });
+    await import('./index');
+    const message = {
+      type: 'resolve-metadata', platform: 'Instagram', id: 'DFHmVC0zHkj',
+      url: 'https://www.instagram.com/reel/DFHmVC0zHkj/',
+    };
+    const sender = { tab: { id: 15 }, url: 'https://www.instagram.com/ssam_kbbq/reels/' } as chrome.runtime.MessageSender;
+    const result = await new Promise<{ metadata: { views: number }; status: string }>((resolve) =>
+      listener?.(message, sender, resolve as (value: unknown) => void));
+
+    expect(result.status).toBe('resolved');
+    expect(result.metadata.views).toBe(100);
+    expect(pageFetch).toHaveBeenCalledOnce();
+    expect(backgroundFetch).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});

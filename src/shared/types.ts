@@ -66,3 +66,15 @@ export type ResolveResponse = {
   /** Epoch milliseconds when requesting this video again is useful. */
   retry_after?: number;
 };
+
+export type PageFetchRequest = {
+  type: 'fetch-video-from-page';
+  platform: Platform;
+  id: string;
+  url: string;
+};
+
+export type PageFetchResponse = {
+  metadata: VideoMetadata | null;
+  diagnostic: string;
+};

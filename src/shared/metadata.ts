@@ -467,6 +467,14 @@ export function metadataFromVideoHtml(html: string, id: string, platform: Platfo
     // share the post's displayed calendar date and must never be borrowed.
     part.published_at = instagramPostTimestamp(html, id) ?? undefined;
   }
+  if (platform === 'Instagram' && !part.published_at && !part.published_date) {
+    // Instagram's single-Reel OG attribution can provide the publication day
+    // even when the server response omits its exact timestamp.
+    const attribution = meta['og:description']?.match(
+      /(?:^|\s)-\s+[\w.]+\s+on\s+([a-z]+\s+\d{1,2},\s*\d{4})(?=\s*:)/i,
+    );
+    if (attribution) part.published_date = verifiedCalendarDate(attribution[1]) ?? undefined;
+  }
   if (platform === 'TikTok' && !part.published_at && !part.published_date) {
     Object.assign(part, tiktokDateFromVideoHtml(html));
   }

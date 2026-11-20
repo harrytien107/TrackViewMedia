@@ -1,10 +1,11 @@
 import { instagram } from './adapters/instagram';
 import { tiktok } from './adapters/tiktok';
 import { facebook } from './adapters/facebook';
+import { fetchVideoFromPage } from './page-fetch';
 import { contextFromUrl, identityFromUrl } from '../shared/urls';
 import { datePrecision, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromVideoHtml } from '../shared/metadata';
 import { allSelections, allVerifiedMetadata, removeSelection, saveSelection, saveVerifiedMetadata, selectionKey, updateSelectedMetadata, verifiedKey, SELECTED_PREFIX, VERIFIED_PREFIX } from '../shared/storage';
-import type { Candidate, PageContext, ResolveRequest, ResolveResponse, VideoMetadata, VideoRecord } from '../shared/types';
+import type { Candidate, PageContext, PageFetchRequest, ResolveRequest, ResolveResponse, VideoMetadata, VideoRecord } from '../shared/types';
 
 const adapters = { Instagram: instagram, TikTok: tiktok, Facebook: facebook };
 const overlays = new Map<HTMLAnchorElement, Overlay>();
@@ -171,7 +172,7 @@ function removeOverlay(overlay: Overlay): void {
 }
 
 function needsFallback(record: VideoRecord): boolean {
-  return (!record.published_at || record.views === null) && !!record.video_url;
+  return (!datePrecision(record) || record.views === null) && !!record.video_url;
 }
 
 function visible(tile: HTMLElement): boolean {
@@ -417,6 +418,11 @@ async function initialize(): Promise<void> {
   });
   chrome.runtime.onMessage.addListener((message: unknown, _sender, respond: (value: unknown) => void) => {
     if (!message || typeof message !== 'object') return false;
+    if ((message as { type?: string }).type === 'fetch-video-from-page') {
+      void fetchVideoFromPage(message as PageFetchRequest).then(respond)
+        .catch(() => respond({ metadata: null, diagnostic: 'page_fetch_error' }));
+      return true;
+    }
     if ((message as { type?: string }).type === 'verify-video') {
       void verifyCurrentVideo().then(respond).catch(() => respond(null));
       return true;
