@@ -1,9 +1,39 @@
-import type { VideoMetadata, VideoRecord } from './types';
+import type { Platform, VideoMetadata, VideoRecord } from './types';
 import { datePrecision, mergeMetadata } from './metadata';
 
 export const SELECTED_PREFIX = 'selected:';
+export const VERIFIED_PREFIX = 'verified:';
 export const selectionKey = (record: Pick<VideoRecord, 'platform' | 'video_id'>) =>
   `${SELECTED_PREFIX}${record.platform}:${record.video_id}`;
+export const verifiedKey = (record: Pick<VideoRecord, 'platform' | 'video_id'>) =>
+  `${VERIFIED_PREFIX}${record.platform}:${record.video_id}`;
+
+export async function allVerifiedMetadata(): Promise<Map<string, VideoMetadata>> {
+  const entries = await chrome.storage.local.get(null);
+  const verified = new Map<string, VideoMetadata>();
+  for (const [key, value] of Object.entries(entries)) {
+    if (key.startsWith(VERIFIED_PREFIX) && value && typeof value === 'object' && !Array.isArray(value)) {
+      verified.set(key, value as VideoMetadata);
+    }
+  }
+  return verified;
+}
+
+export async function getVerifiedMetadata(platform: Platform, video_id: string): Promise<VideoMetadata> {
+  const key = verifiedKey({ platform, video_id });
+  return (await chrome.storage.local.get(key))[key] as VideoMetadata ?? {};
+}
+
+export async function saveVerifiedMetadata(
+  record: Pick<VideoRecord, 'platform' | 'video_id'>, metadata: VideoMetadata,
+): Promise<void> {
+  const prior = await getVerifiedMetadata(record.platform, record.video_id);
+  const next = metadata.date_source === 'manual'
+    ? mergeMetadata(prior, metadata)
+    : mergeMetadata(prior, metadata, prior.date_source === 'manual' ? prior : {});
+  await chrome.storage.local.set({ [verifiedKey(record)]: next });
+  await updateSelectedMetadata(record, next);
+}
 
 export async function allSelections(): Promise<VideoRecord[]> {
   const entries = await chrome.storage.local.get(null);
@@ -34,7 +64,9 @@ export async function clearSelections(): Promise<void> {
   if (keys.length) await chrome.storage.local.remove(keys);
 }
 
-export async function updateSelectedMetadata(record: VideoRecord, extra: VideoMetadata): Promise<void> {
+export async function updateSelectedMetadata(
+  record: Pick<VideoRecord, 'platform' | 'video_id'>, extra: VideoMetadata,
+): Promise<void> {
   const key = selectionKey(record);
   const existing = (await chrome.storage.local.get(key))[key] as VideoRecord | undefined;
   if (!existing) return;

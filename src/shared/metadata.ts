@@ -57,6 +57,13 @@ export function verifiedRelativeDate(value: unknown): string | null {
 export function verifiedDateLabel(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const text = value.trim().replace(/\s+/g, ' ');
+  const numeric = text.match(/^(\d{1,2})[-/](\d{1,2})$/);
+  if (numeric) {
+    const month = Number(numeric[1]);
+    const day = Number(numeric[2]);
+    const days = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    return month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1] ? text : null;
+  }
   const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july',
     'august', 'september', 'october', 'november', 'december'];
   const monthFirst = text.match(/^([a-z]+)\.?\s+(\d{1,2})$/i);
@@ -69,6 +76,20 @@ export function verifiedDateLabel(value: unknown): string | null {
   if (monthIndex < 0) return null;
   const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthIndex];
   return day >= 1 && day <= daysInMonth ? text : null;
+}
+
+/** Treat a manually read label as its stated precision, never as an invented instant. */
+export function parseUserDate(value: string): VideoMetadata | null {
+  const input = value.trim();
+  const timestamp = verifiedTimestamp(input);
+  if (timestamp) return { published_at: timestamp, date_source: 'manual' };
+  const day = verifiedCalendarDate(input);
+  if (day) return { published_date: day, date_source: 'manual' };
+  const label = verifiedDateLabel(input);
+  if (label) return { published_label: label, date_source: 'manual' };
+  const relative = verifiedRelativeDate(input);
+  if (relative) return { published_relative: relative, date_source: 'manual' };
+  return null;
 }
 
 export function datePrecision(meta: VideoMetadata): DatePrecision {
@@ -140,6 +161,15 @@ export function mergeMetadata(...parts: VideoMetadata[]): VideoMetadata {
     const timestamp = verifiedTimestamp(part.published_at);
     const day = verifiedCalendarDate(part.published_date);
     const relative = verifiedRelativeDate(part.published_relative);
+    const dateLabel = verifiedDateLabel(part.published_label);
+    if (part.date_source === 'manual' && (timestamp || day || relative || dateLabel)) {
+      // An explicit user correction replaces prior publication-date evidence.
+      delete out.published_at;
+      delete out.published_date;
+      delete out.published_relative;
+      delete out.published_label;
+      delete out.date_source;
+    }
     if (timestamp) {
       if (part.date_source) out.date_source = part.date_source;
       else if (out.published_at !== timestamp) delete out.date_source;
@@ -150,7 +180,6 @@ export function mergeMetadata(...parts: VideoMetadata[]): VideoMetadata {
     } else if (relative && !out.published_at && !out.published_date && !out.published_label) {
       if (part.date_source) out.date_source = part.date_source;
     }
-    const dateLabel = verifiedDateLabel(part.published_label);
     if (dateLabel && !out.published_at && !out.published_date) {
       if (part.date_source) out.date_source = part.date_source;
       else if (out.published_label !== dateLabel) delete out.date_source;
@@ -250,7 +279,9 @@ export function metadataFromStructuredData(data: unknown, id: string, platform: 
   return mergeMetadata(...parts);
 }
 
-export function metadataFromScriptTexts(texts: string[], id: string, platform: Platform): VideoMetadata {
+export function metadataFromScriptTexts(
+  texts: string[], id: string, platform: Platform, parsedCache?: Map<string, unknown>,
+): VideoMetadata {
   let found: VideoMetadata = {};
   const matches = texts.filter((text) => text.includes(id) && text.length <= 2_000_000);
   const hasDateField = /"(?:taken_at_timestamp|taken_at|published_at|datePublished|uploadDate|createTime|create_time|publish_time|creation_time|created_time)"\s*:/;
@@ -259,7 +290,13 @@ export function metadataFromScriptTexts(texts: string[], id: string, platform: P
   for (const text of [...priority, ...remainder].slice(0, 100)) {
     try {
       const raw = text.replace(/^for\s*\(;;\)\s*;?\s*/, '');
-      found = mergeMetadata(found, metadataFromStructuredData(JSON.parse(raw), id, platform));
+      let data: unknown;
+      if (parsedCache?.has(raw)) data = parsedCache.get(raw);
+      else {
+        data = JSON.parse(raw);
+        parsedCache?.set(raw, data);
+      }
+      found = mergeMetadata(found, metadataFromStructuredData(data, id, platform));
       if (found.published_at && found.views !== undefined && found.views !== null) break;
     } catch { /* invalid JSON, skip */ }
   }
@@ -294,6 +331,16 @@ function jsonLdMatchesVideo(item: Record<string, unknown>, id: string, platform:
 }
 
 function facebookStoryMatchesVideo(story: Record<string, unknown>, id: string): boolean {
+  // Facebook sometimes identifies a creation story using an encoded VK reel ID.
+  const storyId = story.id ?? story.story_id;
+  if (typeof storyId === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(storyId)) {
+    try {
+      if (new RegExp(`(?:^|:)VK:${id}(?:$|:)`).test(atob(storyId))) return true;
+    } catch { /* invalid or non-text story identifier */ }
+  }
+  for (const key of ['permalink_url', 'url']) {
+    if (typeof story[key] === 'string' && identityFromUrl(story[key], 'Facebook')?.id === id) return true;
+  }
   const directVideo = story.video;
   if (directVideo && typeof directVideo === 'object' && !Array.isArray(directVideo) &&
     String((directVideo as Record<string, unknown>).id ?? '') === id) return true;
@@ -338,7 +385,7 @@ function tiktokDateFromVideoHtml(html: string): VideoMetadata {
     const tag = match[1].toLowerCase();
     const attrs = readHtmlAttributes(match[2]);
     const marker = `${attrs['data-e2e'] ?? ''} ${attrs['data-testid'] ?? ''}`;
-    if (tag !== 'time' && !/(?:create.?time|publish|date)/i.test(marker)) continue;
+    if (tag !== 'time' && !/(?:create.?time|video.?time|publish|date)/i.test(marker)) continue;
     const text = decodeEntities(match[3].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim());
     const raw = attrs.datetime ?? text;
     const timestamp = verifiedTimestamp(raw);
@@ -447,14 +494,18 @@ export function metadataFromTile(anchor: HTMLElement, platform?: Platform): Vide
       const label = icon.getAttribute('aria-label') ?? icon.getAttribute('title') ?? '';
       if (!/view\s*count|views?/i.test(label)) continue;
       for (const container of [icon.parentElement, icon.parentElement?.parentElement]) {
-        const text = container?.textContent?.trim() ?? '';
-        if (text.length > 24) continue;
-        const metric = parseMetric(text);
-        if (metric.value !== null) {
+        if (!container) continue;
+        // SVG <title> text is included in textContent on some Instagram tiles.
+        // Read compact count siblings independently of accessibility text.
+        for (const child of container.childNodes) {
+          if (child instanceof Element && (child === icon || child.tagName.toLowerCase() === 'svg' || child.contains(icon))) continue;
+          const metric = parseMetric(child.textContent?.trim() ?? '');
+          if (metric.value === null) continue;
           out.views = metric.value;
           out.views_exact = metric.exact;
           break;
         }
+        if (out.views !== undefined) break;
       }
       if (out.views !== undefined) break;
     }

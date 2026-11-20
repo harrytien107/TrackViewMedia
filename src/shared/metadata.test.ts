@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { datePrecision, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, verifiedTimestamp } from './metadata';
+import { datePrecision, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, parseUserDate, verifiedTimestamp } from './metadata';
 
 describe('publication times', () => {
   it('accepts exact timezone-aware times and unix seconds', () => {
@@ -49,6 +49,13 @@ describe('metric accuracy', () => {
     );
     expect(result.date_source).toBe('embedded');
     expect(result.views_source).toBe('tile');
+  });
+  it('keeps explicit manual date corrections and removes superseded timestamps', () => {
+    const old = { published_at: '2026-10-21T02:11:12.000Z', date_source: 'embedded' as const };
+    const manual = parseUserDate('Nov 18')!;
+    expect(mergeMetadata(old, manual)).toMatchObject({ published_label: 'Nov 18', date_source: 'manual' });
+    expect(mergeMetadata(old, manual).published_at).toBeUndefined();
+    expect(datePrecision(mergeMetadata(old, manual))).toBe('month_day');
   });
 });
 
@@ -167,6 +174,14 @@ describe('metadata extraction', () => {
     expect(metadataFromStructuredData(data, '1130192402541878', 'Facebook').published_at).toBeUndefined();
   });
 
+  it('matches an encoded Facebook VK story to the actual Reel ID', () => {
+    const storyId = btoa('S:zF6157478828123:VK:1130192402541878');
+    const data = { story: { id: storyId, creation_time: 1773878725 } };
+    expect(metadataFromStructuredData(data, '1130192402541878', 'Facebook').published_at)
+      .toBe('2026-03-19T00:05:25.000Z');
+    expect(metadataFromStructuredData(data, '999', 'Facebook').published_at).toBeUndefined();
+  });
+
   it('extracts only tile-scoped view counts', () => {
     document.body.innerHTML = `<a><img alt="Food reel"/><span aria-label="1.3K views"></span><time datetime="2026-10-21T09:11:12+07:00"></time></a>`;
     const data = metadataFromTile(document.querySelector('a')!);
@@ -176,5 +191,15 @@ describe('metadata extraction', () => {
     document.body.innerHTML = `<a><img alt="Food"/><div><svg aria-label="Play"><polygon points="0,0 6,5 0,10"/></svg><span>8.7K</span></div></a>`;
     expect(metadataFromTile(document.querySelector('a')!, 'Instagram'))
       .toMatchObject({ views: '8.7K', views_exact: false, views_source: 'tile' });
+  });
+  it('reads Instagram thumbnail counts without including SVG accessibility text', () => {
+    document.body.innerHTML = `<a><img alt="Food"/><div><svg aria-label="View Count Icon"><title>View Count Icon</title></svg><span>41K</span><span class="caption">Food reel posted today</span></div></a>`;
+    expect(metadataFromTile(document.querySelector('a')!, 'Instagram'))
+      .toMatchObject({ views: '41K', views_exact: false, views_source: 'tile' });
+  });
+  it('accepts TikTok numeric month/day labels without inventing a year', () => {
+    const tile = document.createElement('a');
+    tile.innerHTML = '<span data-e2e="browser-video-time">11-18</span>';
+    expect(metadataFromTile(tile, 'TikTok')).toMatchObject({ published_label: '11-18', date_source: 'tile' });
   });
 });

@@ -2,7 +2,7 @@ export type Platform = 'Instagram' | 'TikTok' | 'Facebook';
 
 export type Metric = number | string | null;
 export type DatePrecision = 'timestamp' | 'day' | 'month_day' | 'relative' | null;
-export type MetadataSource = 'tile' | 'embedded' | 'video_page' | null;
+export type MetadataSource = 'tile' | 'embedded' | 'video_page' | 'manual' | null;
 
 export interface VideoRecord {
   platform: Platform;

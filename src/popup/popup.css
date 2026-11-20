@@ -19,6 +19,18 @@ header p { color: #9fb0c4; font-size: 11px; margin: 0; }
 .summary span { color: #a7bad0; font-size: 10px; line-height: 1.4; }
 .divider { width: 1px; height: 35px; background: #334a5f; margin: 0 19px; }
 .actions { padding: 0 20px 8px; }
+.verification { margin: 0 20px 19px; border-radius: 10px; border: 1px solid #334c60; background: #142435; padding: 14px; }
+.verification .eyebrow { margin-bottom: 8px; }
+.verification button { font-family: inherit; font-weight: 700; padding: 9px 12px; }
+.verify-button { width: 100%; }
+.inspection { display: flex; flex-direction: column; gap: 5px; margin: 11px 0; font-size: 11px; color: #bccfdd; }
+.inspection strong { font-size: 14px; color: #f3f9fc; }
+.inspection .select-video { align-self: flex-start; margin-top: 3px; }
+.date-label { display: block; margin: 12px 0 6px; font-size: 12px; font-weight: 650; }
+.manual-row { display: flex; gap: 6px; }
+.manual-row input { flex: 1; min-width: 0; color: #f6fbff; background: #0b1725; border: 1px solid #52647a; border-radius: 7px; padding: 8px; font: 12px system-ui; }
+.manual-row button { white-space: nowrap; }
+.date-help { color: #9fb3c7; margin: 9px 0 0; font-size: 11px; line-height: 1.4; }
 .action-row { display: flex; gap: 8px; }
 button { font: 650 12px/1.2 inherit; cursor: pointer; border-radius: 8px; }
 .action-row button { flex: 1; padding: 11px 5px; font-family: inherit; font-size: 12px; font-weight: 700; }
