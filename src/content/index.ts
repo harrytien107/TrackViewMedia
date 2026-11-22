@@ -235,18 +235,26 @@ async function fallback(overlay: Overlay): Promise<void> {
     const response = await chrome.runtime.sendMessage<ResolveRequest, ResolveResponse>(request);
     if (response?.retry_after) nextAttempt.set(key, Math.max(Date.now() + 30_000, response.retry_after));
     else nextAttempt.set(key, Date.now() + (response?.metadata ? 30 * 60_000 : 6 * 60 * 60_000));
+    let persistedMetadata: VideoMetadata | null = null;
+    if (response?.metadata) {
+      const recordKey = { platform, video_id };
+      const storageKey = verifiedKey(recordKey);
+      const prior = verified.get(storageKey) ?? {};
+      persistedMetadata = response.metadata.date_source === 'manual'
+        ? mergeMetadata(prior, response.metadata)
+        : mergeMetadata(prior, response.metadata, prior.date_source === 'manual' ? prior : {});
+      verified.set(storageKey, persistedMetadata);
+      await saveVerifiedMetadata(recordKey, response.metadata);
+    }
     for (const item of overlays.values()) {
       if (selectionKey(item.record) !== key) continue;
       item.host.dataset.tvmFetchStatus = [response?.status ?? 'no_response', response?.diagnostic].filter(Boolean).join(' / ');
       if (response?.metadata) {
-        item.record = mergeRecord(item.record, response.metadata, verified.get(verifiedKey(item.record)) ?? {});
+        item.record = mergeRecord(item.record, response.metadata, persistedMetadata ?? {});
       }
       item.lookupState = datePrecision(item.record) ? 'resolved' :
         response?.status === 'rate_limited' ? 'queued' : 'failed';
       render(item);
-      if (response?.metadata && selected.has(selectionKey(item.record))) {
-        void updateSelectedMetadata(item.record, mergeMetadata(response.metadata, verified.get(verifiedKey(item.record)) ?? {}));
-      }
     }
   } catch (error) {
     nextAttempt.set(key, Date.now() + 5 * 60_000);

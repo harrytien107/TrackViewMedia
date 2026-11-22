@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "TrackViewMedia (Firefox Test)",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Show verified publication dates and available views on public Reels and videos; export selected items.",
   "permissions": [
     "storage",
