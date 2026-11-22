@@ -3,13 +3,17 @@ import { datePrecision, mergeMetadata, metadataFromVideoHtml, verifiedCalendarDa
 import type { PageFetchRequest, PageFetchResponse, Platform, ResolveRequest, ResolveResponse, VideoMetadata } from '../shared/types';
 
 // A new cache namespace retries missing dates after upgrading the lookup strategy.
-const CACHE_PREFIX = 'metadata:v4:';
+const CACHE_PREFIX = 'metadata:v5:';
 const RATE_KEY_PREFIX = 'metadata_request_history:';
 const POSITIVE_TTL = 7 * 24 * 60 * 60_000;
 const PARTIAL_TTL = 10 * 60_000;
 const NEGATIVE_TTL = 15 * 60_000;
 const WINDOW_MS = 5 * 60_000;
-const MAX_PER_WINDOW = 12;
+const MAX_PER_WINDOW: Record<Platform, number> = {
+  Instagram: 12,
+  TikTok: 12,
+  Facebook: 30,
+};
 const MIN_GAP_MS = 300;
 const MAX_CONCURRENT = 3;
 let activeWork = 0;
@@ -60,7 +64,7 @@ function reserveRequest(platform: Platform): Promise<number | null> {
     const timestamps: number[] = Array.isArray(state[key])
       ? (state[key] as number[]).filter((time) => now - time < WINDOW_MS && time <= now)
       : [];
-    if (timestamps.length >= MAX_PER_WINDOW) return timestamps[0] + WINDOW_MS + 1000;
+    if (timestamps.length >= MAX_PER_WINDOW[platform]) return timestamps[0] + WINDOW_MS + 1000;
     const platformLastRequest = Math.max(lastRequest.get(platform) ?? 0, ...timestamps, 0);
     const delay = Math.max(0, MIN_GAP_MS - (Date.now() - platformLastRequest));
     if (delay) await new Promise((done) => setTimeout(done, delay));

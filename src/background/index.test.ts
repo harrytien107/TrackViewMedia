@@ -14,6 +14,48 @@ describe('metadata fallback cache', () => {
 });
 
 describe('tab-origin metadata fallback', () => {
+  it('allows the Facebook pagination batch beyond the default 12-request window', async () => {
+    vi.resetModules();
+    const now = Date.now();
+    const state: Record<string, unknown> = {
+      'metadata_request_history:Facebook': Array.from({ length: 12 }, (_, index) => now - 10_000 - index),
+      'metadata_request_history:Instagram': Array.from({ length: 12 }, (_, index) => now - 10_000 - index),
+    };
+    let listener: ((request: unknown, sender: chrome.runtime.MessageSender,
+      respond: (value: unknown) => void) => boolean) | undefined;
+    const pageFetch = vi.fn(async (request: { platform: string }) => ({
+      metadata: { published_date: '2026-01-22', date_source: 'video_page' },
+      diagnostic: `matched_${request.platform.toLowerCase()}_date`,
+    }));
+    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage: (_tabId: number, request: { platform: string }) => pageFetch(request) },
+      storage: { local: {
+        get: async (key: string) => ({ [key]: state[key] }),
+        set: async (entries: Record<string, unknown>) => { Object.assign(state, entries); },
+      } },
+      runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } },
+    });
+    await import('./index');
+
+    const send = (platform: 'Facebook' | 'Instagram', id: string, url: string, senderUrl: string) =>
+      new Promise<{ status: string }>((resolve) => listener?.(
+        { type: 'resolve-metadata', platform, id, url },
+        { tab: { id: platform === 'Facebook' ? 3 : 4 }, url: senderUrl } as chrome.runtime.MessageSender,
+        resolve as (value: unknown) => void,
+      ));
+    const facebook = await send('Facebook', '1802910940416819',
+      'https://www.facebook.com/reel/1802910940416819',
+      'https://www.facebook.com/profile.php?id=61574788228123&sk=reels_tab');
+    const instagram = await send('Instagram', 'ABC123',
+      'https://www.instagram.com/reel/ABC123/', 'https://www.instagram.com/example/reels/');
+
+    expect(facebook.status).toBe('resolved');
+    expect(instagram.status).toBe('rate_limited');
+    expect(pageFetch).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
   it('uses the content page to retrieve a Reel timestamp and caches the result', async () => {
     vi.resetModules();
     const state: Record<string, unknown> = {};
