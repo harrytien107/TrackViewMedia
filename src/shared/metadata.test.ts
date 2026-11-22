@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { datePrecision, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, parseUserDate, verifiedTimestamp } from './metadata';
+import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, parseUserDate, verifiedTimestamp } from './metadata';
 
 describe('publication times', () => {
   it('accepts exact timezone-aware times and unix seconds', () => {
@@ -81,6 +81,28 @@ describe('metadata extraction', () => {
     const fromTile = metadataFromTile(tile, 'TikTok');
     expect(fromTile).toMatchObject({ published_relative: '3 days ago', date_source: 'tile' });
     expect(fromTile.published_at).toBeUndefined();
+  });
+
+  it('reads the current TikTok video-detail hydration shape by exact video ID', () => {
+    const html = `<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">${JSON.stringify({
+      __DEFAULT_SCOPE__: {
+        'webapp.video-detail': {
+          itemInfo: {
+            itemStruct: {
+              id: '7709061097264860434',
+              createTime: '1794905675',
+              stats: { playCount: '7143', diggCount: 138, commentCount: 2 },
+            },
+          },
+        },
+      },
+    })}</script>`;
+    expect(metadataFromVideoHtml(html, '7709061097264860434', 'TikTok')).toMatchObject({
+      published_at: '2026-11-17T08:54:35.000Z',
+      views: 7143,
+      views_exact: true,
+      date_source: 'video_page',
+    });
   });
 
   it('reads an ID-matched TikTok video inside a string-encoded hydration payload', () => {
@@ -243,6 +265,37 @@ describe('metadata extraction', () => {
       .toBe('2026-03-19T00:05:25.000Z');
     expect(metadataFromVideoHtml(`<script>${script}</script>`, '456', 'Facebook').published_at)
       .toBeUndefined();
+  });
+
+  it('reads Facebook Reel publish_time from the real tracking payload shape', () => {
+    const id = '1130192402541878';
+    const tracking = JSON.stringify({
+      top_level_post_id: id,
+      video_id: id,
+      post_context: { publish_time: 1773878725, story_fbid: [id] },
+    });
+    const data = { aggregated_fb_shorts: { edges: [{ profile_reel_node: { node: {
+      tracking,
+      attachments: [{ media: { id, shareable_url: `https://www.facebook.com/reel/${id}` } }],
+    } } }] } };
+    expect(metadataFromStructuredData(data, id, 'Facebook').published_at)
+      .toBe('2026-03-19T00:05:25.000Z');
+    expect(metadataFromStructuredData(data, '999', 'Facebook').published_at).toBeUndefined();
+  });
+
+  it('bulk-collects Facebook Reel publish_time values from one profile script pass', () => {
+    const first = '1130192402541878';
+    const second = '2025590315033135';
+    const payload = { collection: { edges: [first, second].map((id, index) => ({
+      profile_reel_node: { node: { tracking: JSON.stringify({
+        top_level_post_id: id,
+        video_id: id,
+        post_context: { publish_time: 1773878725 + index * 60, story_fbid: [id] },
+      }) } },
+    })) } };
+    const found = facebookTrackingMetadataFromScriptTexts([JSON.stringify(payload)]);
+    expect(found.get(first)).toMatchObject({ published_at: '2026-03-19T00:05:25.000Z', date_source: 'embedded' });
+    expect(found.get(second)).toMatchObject({ published_at: '2026-03-19T00:06:25.000Z', date_source: 'embedded' });
   });
 
   it('extracts only tile-scoped view counts', () => {

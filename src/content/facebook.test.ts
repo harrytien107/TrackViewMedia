@@ -23,7 +23,7 @@ describe('Facebook late-loaded Reel metadata', () => {
       toJSON: () => ({}),
     } as DOMRect);
     const id = '1130192402541878';
-    document.body.innerHTML = `<a href="/reel/${id}"><img alt="Reel preview" src="x" /></a>`;
+    document.body.innerHTML = `<a href="/reel/${id}"><img alt="Reel preview" src="x" /><svg><path d="M3.707 5.488 test" /></svg><span>11.3K</span></a>`;
     const { stopTracking } = await import('./index');
     shutdown = stopTracking;
     await vi.advanceTimersByTimeAsync(170);
@@ -46,5 +46,42 @@ describe('Facebook late-loaded Reel metadata', () => {
     await vi.advanceTimersByTimeAsync(170);
     expect(badge().shadowRoot?.querySelector('.date')?.textContent).toContain('Mar 18');
     expect(anchor.querySelectorAll('[data-track-view-media="overlay"]')).toHaveLength(1);
+  });
+
+  it('uses profile tracking publish_time without falling back to an individual Reel request', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const sendMessage = vi.fn(async () => ({ metadata: null, status: 'unavailable' }));
+    vi.stubGlobal('chrome', {
+      runtime: { sendMessage, onMessage: { addListener: vi.fn() } },
+      storage: {
+        local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}), remove: vi.fn(async () => {}) },
+        onChanged: { addListener: vi.fn() },
+      },
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, width: 190, height: 270, left: 0, top: 0, right: 190, bottom: 270,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const id = '1130192402541878';
+    document.body.innerHTML = `<a href="/reel/${id}"><img alt="Reel preview" src="x" /><svg><path d="M3.707 5.488 test" /></svg><span>11.3K</span></a>`;
+    const script = document.createElement('script');
+    script.type = 'application/json';
+    script.textContent = JSON.stringify({ collection: { edges: [{ profile_reel_node: { node: {
+      tracking: JSON.stringify({
+        top_level_post_id: id,
+        video_id: id,
+        post_context: { publish_time: 1773878725, story_fbid: [id] },
+      }),
+    } } }] } });
+    document.head.appendChild(script);
+
+    const { stopTracking } = await import('./index');
+    shutdown = stopTracking;
+    await vi.advanceTimersByTimeAsync(170);
+    const overlay = document.querySelector<HTMLDivElement>('[data-track-view-media="overlay"]')!;
+    expect(overlay.shadowRoot?.querySelector('.date')?.textContent).toContain('Mar');
+    expect(overlay.dataset.tvmDateSource).toBe('embedded');
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });

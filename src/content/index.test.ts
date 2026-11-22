@@ -70,3 +70,55 @@ describe('content script lifecycle (simulated public TikTok page)', () => {
     stopTracking();
   });
 });
+
+describe('automatic metadata lookup scheduling', () => {
+  let shutdown: (() => void) | null = null;
+  afterEach(() => {
+    shutdown?.();
+    shutdown = null;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('starts up to three visible missing-date lookups concurrently', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const pending: Array<(value: unknown) => void> = [];
+    const sendMessage = vi.fn(() => new Promise((resolve) => pending.push(resolve)));
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => {}),
+          remove: vi.fn(async () => {}),
+        },
+        onChanged: { addListener: vi.fn() },
+      },
+      runtime: { sendMessage, onMessage: { addListener: vi.fn() } },
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, width: 190, height: 270, left: 0, top: 0, right: 190, bottom: 270,
+      toJSON: () => ({}),
+    } as DOMRect);
+    document.body.innerHTML = Array.from({ length: 4 }, (_, index) =>
+      `<a href="/@chef/video/${100 + index}"><img alt="Video ${index}" src="x" /><span data-e2e="video-views">${index + 1}K</span></a>`,
+    ).join('');
+
+    const module = await import('./index');
+    shutdown = module.stopTracking;
+    await vi.advanceTimersByTimeAsync(170);
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(Array.from(document.querySelectorAll<HTMLDivElement>('[data-track-view-media="overlay"]'))
+      .filter((overlay) => overlay.shadowRoot?.querySelector('.date')?.textContent === 'Loading date...'))
+      .toHaveLength(4);
+
+    for (const resolve of pending.splice(0)) resolve({ metadata: null, status: 'unavailable', diagnostic: 'no_video_date' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sendMessage).toHaveBeenCalledTimes(4);
+    for (const resolve of pending.splice(0)) resolve({ metadata: null, status: 'unavailable', diagnostic: 'no_video_date' });
+  });
+});

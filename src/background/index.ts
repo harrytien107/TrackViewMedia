@@ -1,26 +1,28 @@
 import { identityFromUrl, platformForUrl } from '../shared/urls';
 import { datePrecision, mergeMetadata, metadataFromVideoHtml, verifiedCalendarDate, verifiedTimestamp } from '../shared/metadata';
-import type { PageFetchRequest, PageFetchResponse, ResolveRequest, ResolveResponse, VideoMetadata } from '../shared/types';
+import type { PageFetchRequest, PageFetchResponse, Platform, ResolveRequest, ResolveResponse, VideoMetadata } from '../shared/types';
 
 // A new cache namespace retries missing dates after upgrading the lookup strategy.
-const CACHE_PREFIX = 'metadata:v3:';
-const RATE_KEY = 'metadata_request_history';
+const CACHE_PREFIX = 'metadata:v4:';
+const RATE_KEY_PREFIX = 'metadata_request_history:';
 const POSITIVE_TTL = 7 * 24 * 60 * 60_000;
 const PARTIAL_TTL = 10 * 60_000;
 const NEGATIVE_TTL = 15 * 60_000;
 const WINDOW_MS = 5 * 60_000;
 const MAX_PER_WINDOW = 12;
-const MIN_GAP_MS = 2500;
-let work = Promise.resolve();
-let lastRequest = 0;
+const MIN_GAP_MS = 300;
+const MAX_CONCURRENT = 3;
+let activeWork = 0;
+const workWaiters: Array<() => void> = [];
+const lastRequest = new Map<Platform, number>();
+const rateWork = new Map<Platform, Promise<void>>();
 const pending = new Map<string, Promise<ResolveResponse>>();
 
 type CacheEntry = { timestamp: number; metadata: VideoMetadata | null; diagnostic?: string };
 
 export function cacheLifetime(metadata: VideoMetadata | null): number {
   if (!metadata) return NEGATIVE_TTL;
-  if ((verifiedTimestamp(metadata.published_at) || verifiedCalendarDate(metadata.published_date)) &&
-      metadata.views !== undefined && metadata.views !== null) {
+  if (verifiedTimestamp(metadata.published_at) || verifiedCalendarDate(metadata.published_date)) {
     return POSITIVE_TTL;
   }
   return PARTIAL_TTL;
@@ -36,26 +38,40 @@ function validMessage(value: unknown): value is ResolveRequest {
   return !!identity && identity.id === req.id && identity.url === req.url;
 }
 
-function queue<T>(task: () => Promise<T>): Promise<T> {
-  const next = work.then(task, task);
-  work = next.then(() => undefined, () => undefined);
-  return next;
+async function queue<T>(task: () => Promise<T>): Promise<T> {
+  if (activeWork >= MAX_CONCURRENT) {
+    await new Promise<void>((resolve) => workWaiters.push(resolve));
+  }
+  activeWork += 1;
+  try {
+    return await task();
+  } finally {
+    activeWork -= 1;
+    workWaiters.shift()?.();
+  }
 }
 
-async function reserveRequest(): Promise<number | null> {
-  const now = Date.now();
-  const state = await chrome.storage.local.get(RATE_KEY);
-  const timestamps: number[] = Array.isArray(state[RATE_KEY])
-    ? (state[RATE_KEY] as number[]).filter((time) => now - time < WINDOW_MS && time <= now)
-    : [];
-  if (timestamps.length >= MAX_PER_WINDOW) return timestamps[0] + WINDOW_MS + 1000;
-  if (timestamps.length) lastRequest = Math.max(lastRequest, ...timestamps);
-  const delay = Math.max(0, MIN_GAP_MS - (Date.now() - lastRequest));
-  if (delay) await new Promise((done) => setTimeout(done, delay));
-  lastRequest = Date.now();
-  timestamps.push(lastRequest);
-  await chrome.storage.local.set({ [RATE_KEY]: timestamps });
-  return null;
+function reserveRequest(platform: Platform): Promise<number | null> {
+  const previous = rateWork.get(platform) ?? Promise.resolve();
+  const result = previous.then(async () => {
+    const key = `${RATE_KEY_PREFIX}${platform}`;
+    const now = Date.now();
+    const state = await chrome.storage.local.get(key);
+    const timestamps: number[] = Array.isArray(state[key])
+      ? (state[key] as number[]).filter((time) => now - time < WINDOW_MS && time <= now)
+      : [];
+    if (timestamps.length >= MAX_PER_WINDOW) return timestamps[0] + WINDOW_MS + 1000;
+    const platformLastRequest = Math.max(lastRequest.get(platform) ?? 0, ...timestamps, 0);
+    const delay = Math.max(0, MIN_GAP_MS - (Date.now() - platformLastRequest));
+    if (delay) await new Promise((done) => setTimeout(done, delay));
+    const reservedAt = Date.now();
+    lastRequest.set(platform, reservedAt);
+    timestamps.push(reservedAt);
+    await chrome.storage.local.set({ [key]: timestamps });
+    return null;
+  });
+  rateWork.set(platform, result.then(() => undefined, () => undefined));
+  return result;
 }
 
 async function resolveMetadata(req: ResolveRequest, sender: chrome.runtime.MessageSender): Promise<ResolveResponse> {
@@ -74,7 +90,7 @@ async function resolveMetadata(req: ResolveRequest, sender: chrome.runtime.Messa
     let requestReserved = false;
     const pageUrl = sender.url ? new URL(sender.url) : null;
     if (sender.tab?.id !== undefined && pageUrl && platformForUrl(pageUrl) === req.platform) {
-      const retryAfter = await reserveRequest();
+      const retryAfter = await reserveRequest(req.platform);
       if (retryAfter !== null) {
         return { metadata: null, status: 'rate_limited' as const, diagnostic: 'request_limit_reached', retry_after: retryAfter };
       }
@@ -98,7 +114,7 @@ async function resolveMetadata(req: ResolveRequest, sender: chrome.runtime.Messa
     // record as incomplete. One video resolution consumes one rate-limit slot.
     if (!pageLookupHasDate && (!metadata || !datePrecision(metadata))) {
       if (!requestReserved) {
-        const retryAfter = await reserveRequest();
+        const retryAfter = await reserveRequest(req.platform);
         if (retryAfter !== null) {
           return { metadata, status: 'rate_limited' as const, diagnostic: 'request_limit_reached', retry_after: retryAfter };
         }

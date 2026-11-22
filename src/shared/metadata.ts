@@ -283,6 +283,10 @@ export function metadataFromStructuredData(data: unknown, id: string, platform: 
     if (platform === 'Facebook' && node.creation_time !== undefined && facebookStoryMatchesVideo(node, id)) {
       parts.push(extractItem(node, platform));
     }
+    if (platform === 'Facebook' && node.post_context && typeof node.post_context === 'object' &&
+        !Array.isArray(node.post_context) && facebookTrackingMatchesVideo(node, id)) {
+      parts.push(extractItem(node.post_context as Record<string, unknown>, platform));
+    }
     for (const [key, child] of Object.entries(node)) {
       // TikTok and some Instagram hydration maps use the video ID as the key.
       if (key === id && child && typeof child === 'object' && !Array.isArray(child)) {
@@ -295,6 +299,76 @@ export function metadataFromStructuredData(data: unknown, id: string, platform: 
     }
   }
   return mergeMetadata(...parts);
+}
+
+function facebookTrackingIds(node: Record<string, unknown>): Set<string> {
+  const ids = new Set<string>();
+  for (const key of ['top_level_post_id', 'video_id', 'post_id']) {
+    const value = node[key];
+    if (typeof value === 'string' || typeof value === 'number') ids.add(String(value));
+  }
+  const postContext = node.post_context;
+  if (postContext && typeof postContext === 'object' && !Array.isArray(postContext)) {
+    const story = (postContext as Record<string, unknown>).story_fbid;
+    if (Array.isArray(story)) {
+      for (const value of story) if (typeof value === 'string' || typeof value === 'number') ids.add(String(value));
+    } else if (typeof story === 'string' || typeof story === 'number') {
+      ids.add(String(story));
+    }
+  }
+  return ids;
+}
+
+function facebookTrackingMatchesVideo(node: Record<string, unknown>, id: string): boolean {
+  const ids = facebookTrackingIds(node);
+  return ids.size === 1 && ids.has(id);
+}
+
+/** Parse Facebook profile tracking payloads once so all visible Reel dates can be populated together. */
+export function facebookTrackingMetadataFromScriptTexts(
+  texts: string[], parsedCache?: Map<string, unknown>,
+): Map<string, VideoMetadata> {
+  const found = new Map<string, VideoMetadata>();
+  for (const text of texts) {
+    if (!text.includes('tracking') || !text.includes('publish_time') || text.length > 2_000_000) continue;
+    try {
+      const raw = unwrapScriptJson(text);
+      if (!raw) continue;
+      let data: unknown;
+      if (parsedCache?.has(raw)) data = parsedCache.get(raw);
+      else {
+        data = JSON.parse(raw);
+        parsedCache?.set(raw, data);
+      }
+      const stack: unknown[] = [data];
+      const seen = new Set<object>();
+      let visited = 0;
+      while (stack.length && visited++ < 60_000) {
+        const value = stack.pop();
+        if (!value || typeof value !== 'object' || seen.has(value)) continue;
+        seen.add(value);
+        if (Array.isArray(value)) {
+          for (const child of value) if (child && typeof child === 'object') stack.push(child);
+          continue;
+        }
+        const node = value as Record<string, unknown>;
+        if (typeof node.tracking === 'string' && node.tracking.trim().startsWith('{')) {
+          try {
+            const tracking = JSON.parse(node.tracking) as Record<string, unknown>;
+            const ids = facebookTrackingIds(tracking);
+            const postContext = tracking.post_context;
+            if (ids.size === 1 && postContext && typeof postContext === 'object' && !Array.isArray(postContext)) {
+              const id = [...ids][0];
+              const metadata = withSource(extractItem(postContext as Record<string, unknown>, 'Facebook'), 'embedded');
+              if (datePrecision(metadata)) found.set(id, mergeMetadata(found.get(id) ?? {}, metadata));
+            }
+          } catch { /* tracking field is not JSON */ }
+        }
+        for (const child of Object.values(node)) if (child && typeof child === 'object') stack.push(child);
+      }
+    } catch { /* invalid script payload */ }
+  }
+  return found;
 }
 
 function facebookStoryHasConflictingVideo(story: Record<string, unknown>, id: string): boolean {

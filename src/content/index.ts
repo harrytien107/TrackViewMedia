@@ -3,7 +3,7 @@ import { tiktok } from './adapters/tiktok';
 import { facebook } from './adapters/facebook';
 import { fetchVideoFromPage } from './page-fetch';
 import { contextFromUrl, identityFromUrl } from '../shared/urls';
-import { datePrecision, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromVideoHtml } from '../shared/metadata';
+import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromVideoHtml } from '../shared/metadata';
 import { allSelections, allVerifiedMetadata, removeSelection, saveSelection, saveVerifiedMetadata, selectionKey, updateSelectedMetadata, verifiedKey, SELECTED_PREFIX, VERIFIED_PREFIX } from '../shared/storage';
 import type { Candidate, PageContext, PageFetchRequest, ResolveRequest, ResolveResponse, VideoMetadata, VideoRecord } from '../shared/types';
 
@@ -16,7 +16,11 @@ const structuredCache = new Map<string, VideoMetadata>();
 const parsedScripts = new Map<string, unknown>();
 const SCRIPT_SELECTOR = 'script:not([src])';
 let scripts: string[] = [];
-let fallbackInFlight = false;
+const FALLBACK_CONCURRENCY = 3;
+let fallbackActive = 0;
+let scriptsVersion = 0;
+let facebookTrackingVersion = -1;
+let facebookTrackingCache = new Map<string, VideoMetadata>();
 let currentHref = '';
 let lastProfile: { platform: string; username: string } | null = null;
 let scanScheduled = false;
@@ -36,6 +40,7 @@ interface Overlay {
   diagnostics: HTMLElement;
   selection: HTMLButtonElement;
   record: VideoRecord;
+  lookupState: 'queued' | 'loading' | 'failed' | 'resolved';
 }
 
 function profileName(ctx: PageContext): string {
@@ -80,9 +85,13 @@ function mergeRecord(record: VideoRecord, ...parts: VideoMetadata[]): VideoRecor
 function render(overlay: Overlay): void {
   const key = selectionKey(overlay.record);
   const existing = selected.get(key);
-  const { short, full } = localDate(overlay.record.published_at, overlay.record.published_date, overlay.record.published_relative, overlay.record.published_label ?? null);
-  if (overlay.date.textContent !== short) overlay.date.textContent = short;
-  overlay.date.title = `${full}${overlay.record.date_source ? ` (source: ${overlay.record.date_source})` : ''}`;
+  const local = localDate(overlay.record.published_at, overlay.record.published_date, overlay.record.published_relative, overlay.record.published_label ?? null);
+  const hasDate = !!datePrecision(overlay.record);
+  const loadingDate = !hasDate && (overlay.lookupState === 'queued' || overlay.lookupState === 'loading');
+  const dateText = loadingDate ? 'Loading date...' : local.short;
+  const dateTitle = loadingDate ? 'Automatic publication-date lookup is queued or running.' : local.full;
+  if (overlay.date.textContent !== dateText) overlay.date.textContent = dateText;
+  overlay.date.title = `${dateTitle}${overlay.record.date_source ? ` (source: ${overlay.record.date_source})` : ''}`;
   overlay.host.dataset.tvmDateSource = overlay.record.date_source ?? 'unavailable';
   const count = overlay.record.views;
   const viewsText = count === null ? 'Views unavailable' :
@@ -138,7 +147,10 @@ function createOverlay(candidate: Candidate, record: VideoRecord): Overlay {
     candidate.tile.style.position = 'relative';
   }
   candidate.tile.appendChild(host);
-  const overlay: Overlay = { anchor: candidate.anchor, tile: candidate.tile, host, date, views, diagnostics, selection, record };
+  const overlay: Overlay = {
+    anchor: candidate.anchor, tile: candidate.tile, host, date, views, diagnostics, selection, record,
+    lookupState: datePrecision(record) ? 'resolved' : (record.video_url ? 'queued' : 'failed'),
+  };
   selection.addEventListener('click', (event) => {
     event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
     const key = selectionKey(overlay.record);
@@ -181,28 +193,33 @@ function visible(tile: HTMLElement): boolean {
 }
 
 function pumpFallback(): void {
-  if (fallbackInFlight) return;
-  const eligible = Array.from(overlays.values())
+  if (retryTimer !== null) window.clearTimeout(retryTimer);
+  retryTimer = null;
+  const eligible = () => Array.from(overlays.values())
     .filter((overlay) => needsFallback(overlay.record) &&
       (selected.has(selectionKey(overlay.record)) || visible(overlay.tile)))
     .sort((a, b) => Number(selected.has(selectionKey(b.record))) - Number(selected.has(selectionKey(a.record))));
-  const overlay = eligible.find((item) =>
-    (nextAttempt.get(selectionKey(item.record)) ?? 0) <= Date.now());
-  if (retryTimer !== null) window.clearTimeout(retryTimer);
-  retryTimer = null;
-  if (!overlay) {
-    const next = Math.min(...eligible.map((item) => nextAttempt.get(selectionKey(item.record)) ?? Infinity));
+
+  while (fallbackActive < FALLBACK_CONCURRENCY) {
+    const overlay = eligible().find((item) =>
+      (nextAttempt.get(selectionKey(item.record)) ?? 0) <= Date.now());
+    if (!overlay) break;
+    fallbackActive += 1;
+    overlay.lookupState = datePrecision(overlay.record) ? 'resolved' : 'loading';
+    render(overlay);
+    void fallback(overlay).finally(() => {
+      fallbackActive -= 1;
+      pumpFallback();
+    });
+  }
+
+  if (fallbackActive < FALLBACK_CONCURRENCY) {
+    const next = Math.min(...eligible().map((item) => nextAttempt.get(selectionKey(item.record)) ?? Infinity));
     if (Number.isFinite(next)) retryTimer = window.setTimeout(() => {
       retryTimer = null;
       pumpFallback();
     }, Math.max(1000, next - Date.now()));
-    return;
   }
-  fallbackInFlight = true;
-  void fallback(overlay).finally(() => {
-    fallbackInFlight = false;
-    pumpFallback();
-  });
 }
 
 async function fallback(overlay: Overlay): Promise<void> {
@@ -221,6 +238,8 @@ async function fallback(overlay: Overlay): Promise<void> {
       if (response?.metadata) {
         item.record = mergeRecord(item.record, response.metadata, verified.get(verifiedKey(item.record)) ?? {});
       }
+      item.lookupState = datePrecision(item.record) ? 'resolved' :
+        response?.status === 'rate_limited' ? 'queued' : 'failed';
       render(item);
       if (response?.metadata && selected.has(selectionKey(item.record))) {
         void updateSelectedMetadata(item.record, mergeMetadata(response.metadata, verified.get(verifiedKey(item.record)) ?? {}));
@@ -231,6 +250,7 @@ async function fallback(overlay: Overlay): Promise<void> {
     for (const item of overlays.values()) {
       if (selectionKey(item.record) !== key) continue;
       item.host.dataset.tvmFetchStatus = error instanceof Error ? error.name : 'message_error';
+      item.lookupState = datePrecision(item.record) ? 'resolved' : 'failed';
       render(item);
     }
   }
@@ -253,6 +273,16 @@ function refreshScripts(): void {
     if (changed.some((text) => text.includes(key))) structuredCache.delete(key);
   }
   scripts = updated;
+  scriptsVersion += 1;
+  facebookTrackingVersion = -1;
+}
+
+function facebookProfileMetadata(): Map<string, VideoMetadata> {
+  if (facebookTrackingVersion !== scriptsVersion) {
+    facebookTrackingCache = facebookTrackingMetadataFromScriptTexts(scripts, parsedScripts);
+    facebookTrackingVersion = scriptsVersion;
+  }
+  return facebookTrackingCache;
 }
 
 async function verifyCurrentVideo(): Promise<{
@@ -347,14 +377,17 @@ function scan(): void {
     }
   }
   const candidates = adapters[ctx.platform].discover();
+  const facebookMetadata = ctx.platform === 'Facebook' ? facebookProfileMetadata() : null;
   for (const candidate of candidates) {
     const existing = overlays.get(candidate.anchor);
     if (existing && (existing.record.video_id !== candidate.identity.id || existing.tile !== candidate.tile)) {
       removeOverlay(existing);
     }
     if (!structuredCache.has(candidate.identity.id)) {
-      structuredCache.set(candidate.identity.id,
-        metadataFromScriptTexts(scripts, candidate.identity.id, ctx.platform, parsedScripts));
+      const profileMetadata = facebookMetadata?.get(candidate.identity.id) ?? {};
+      const genericMetadata = ctx.platform === 'Facebook' && datePrecision(profileMetadata)
+        ? {} : metadataFromScriptTexts(scripts, candidate.identity.id, ctx.platform, parsedScripts);
+      structuredCache.set(candidate.identity.id, mergeMetadata(profileMetadata, genericMetadata));
     }
     candidate.metadata = mergeMetadata(candidate.metadata, structuredCache.get(candidate.identity.id) ?? {});
     const record = candidateRecord(candidate, ctx);
@@ -363,6 +396,7 @@ function scan(): void {
     const overlay = overlays.get(candidate.anchor);
     if (overlay) {
       overlay.record = mergeRecord(record, selectedRecord ?? {}, overlay.record, record, savedVerification);
+      if (datePrecision(overlay.record)) overlay.lookupState = 'resolved';
       render(overlay);
     } else {
       const ready = mergeRecord(record, selectedRecord ?? {}, record, savedVerification);
