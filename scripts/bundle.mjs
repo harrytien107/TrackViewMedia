@@ -20,3 +20,9 @@ for (const entry of ['content', 'background']) {
 await cp('dist', 'dist-firefox', { recursive: true, force: true });
 const firefoxManifest = await readFile('manifests/firefox-mv2.json', 'utf8');
 await writeFile('dist-firefox/manifest.json', firefoxManifest);
+
+// Thorium keeps Manifest V2 support, so it gets a Chromium MV2 package with
+// a stable signing identity and self-hosted update_url.
+await cp('dist', 'dist-thorium', { recursive: true, force: true });
+const thoriumManifest = await readFile('manifests/thorium-mv2.json', 'utf8');
+await writeFile('dist-thorium/manifest.json', thoriumManifest);

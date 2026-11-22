@@ -4,6 +4,8 @@ node_modules/
 .screenshots/
 dist/
 dist-firefox/
+dist-thorium/
+keys/
 .vite/
 coverage/
 *.log

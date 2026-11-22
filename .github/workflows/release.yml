@@ -14,6 +14,7 @@ jobs:
     env:
       WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
       WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+      THORIUM_EXTENSION_KEY_B64: ${{ secrets.THORIUM_EXTENSION_KEY_B64 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +45,27 @@ jobs:
           mkdir -p release
           (cd dist && zip -qr "../release/TrackViewMedia-Chrome-v${VERSION}.zip" .)
           (cd dist-firefox && zip -qr "../release/TrackViewMedia-Firefox-v${VERSION}-unsigned.xpi" .)
+          (cd dist-thorium && zip -qr "../release/TrackViewMedia-Thorium-v${VERSION}-unpacked.zip" .)
+
+      - name: Set up Chrome for Thorium CRX packaging
+        if: ${{ env.THORIUM_EXTENSION_KEY_B64 != '' }}
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+
+      - name: Package signed Thorium CRX
+        if: ${{ env.THORIUM_EXTENSION_KEY_B64 != '' }}
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p keys
+          printf '%s' "$THORIUM_EXTENSION_KEY_B64" | base64 --decode > keys/thorium-extension.pem
+          chmod 600 keys/thorium-extension.pem
+          node scripts/setup-thorium-key.mjs
+          git diff --exit-code -- manifests/thorium-mv2.json thorium-updates.xml
+          chrome --pack-extension="$PWD/dist-thorium" --pack-extension-key="$PWD/keys/thorium-extension.pem" --no-sandbox
+          test -f dist-thorium.crx
+          mv dist-thorium.crx "release/TrackViewMedia-Thorium-v${VERSION}.crx"
 
       - name: Sign Firefox build with AMO
         if: ${{ env.WEB_EXT_API_KEY != '' && env.WEB_EXT_API_SECRET != '' }}

@@ -18,6 +18,8 @@ Chrome/Edge installations loaded unpacked or from a GitHub ZIP do not self-repla
 
 The Firefox build is generated in **`dist-firefox/`**. Its stable extension ID uses `browser_specific_settings.gecko.update_url` and checks `firefox-updates.json` from this repository. Normal Firefox installs require a Mozilla-signed XPI for automatic updates.
 
+Thorium gets a separate **Manifest V2** build in **`dist-thorium/`**. It has a stable Chromium extension ID and a self-hosted `update_url` that reads `thorium-updates.xml` from this repository. Automatic updates require the packed `.crx` build signed with the same private key on every release. Loading `dist-thorium/` unpacked is useful for testing, but unpacked extensions do not replace themselves from the update URL.
+
 Browse a supported public profile, scroll to load Reels/videos, and use the **+** button on individual thumbnails. In the toolbar popup, choose **Export CSV**, **Export JSON**, or **Clear selection**. Exports include selected videos from all supported profiles, not just the current tab.
 
 ## Supported public-page examples
@@ -62,7 +64,7 @@ git push origin main
 git push origin v0.2.1
 ```
 
-The `Build release` GitHub Actions workflow runs the tests, production build, popup smoke test, creates a Chrome/Edge ZIP and Firefox XPI package, writes SHA-256 checksums, and publishes them to GitHub Releases.
+The `Build release` GitHub Actions workflow runs the tests, production build, popup smoke test, creates Chrome/Edge, Firefox, and Thorium packages, writes SHA-256 checksums, and publishes them to GitHub Releases.
 
 For Firefox automatic updates outside AMO, add these repository secrets before tagging a release:
 
@@ -70,3 +72,13 @@ For Firefox automatic updates outside AMO, add these repository secrets before t
 - `WEB_EXT_API_SECRET`
 
 When both are configured, the release workflow asks Mozilla's Add-ons API to sign the Firefox build and publishes it as `TrackViewMedia-Firefox-vX.Y.Z.xpi`. `firefox-updates.json` points Firefox at that signed release asset. Without the signing secrets, the workflow still publishes an unsigned Firefox package for development/testing, but Firefox release builds will not silently install it as an update.
+
+For Thorium's packed self-hosted update channel, add the local signing key as a GitHub Actions secret named `THORIUM_EXTENSION_KEY_B64`. The key is created once by `node scripts/setup-thorium-key.mjs` and stored at `keys/thorium-extension.pem`, which is gitignored. Keep a secure backup of this file. Losing or changing it changes the Chromium extension identity and breaks upgrades from existing installs.
+
+On PowerShell, generate the base64 value without printing the private key itself:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('keys/thorium-extension.pem')) | Set-Clipboard
+```
+
+Paste the clipboard value into the repository secret `THORIUM_EXTENSION_KEY_B64`. Tagged releases will then include `TrackViewMedia-Thorium-vX.Y.Z.crx`, and Thorium can use the standard Chromium update check against `thorium-updates.xml`. The browser controls the exact check timing, so an update may be picked up at startup or during its normal periodic update cycle.
