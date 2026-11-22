@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, parseUserDate, verifiedTimestamp } from './metadata';
+import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromPlatformId, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, parseUserDate, verifiedTimestamp } from './metadata';
 
 describe('publication times', () => {
+  it('derives only an approximate day from Instagram and TikTok media IDs', () => {
+    expect(metadataFromPlatformId('Instagram', 'DFHmVC0zHkj')).toEqual({
+      published_date: '2025-01-22', date_source: 'video_id',
+    });
+    expect(metadataFromPlatformId('Instagram', 'Df6ihlcp9__')).toEqual({
+      published_date: '2026-11-19', date_source: 'video_id',
+    });
+    expect(metadataFromPlatformId('TikTok', '7709061097264860434')).toEqual({
+      published_date: '2026-11-17', date_source: 'video_id',
+    });
+    expect(metadataFromPlatformId('TikTok', '123')).toEqual({});
+    expect(metadataFromPlatformId('Facebook', '1130192402541878')).toEqual({});
+  });
   it('accepts exact timezone-aware times and unix seconds', () => {
     expect(verifiedTimestamp('2026-10-21T09:11:12+07:00')).toBe('2026-10-21T02:11:12.000Z');
     expect(verifiedTimestamp('2026-10-21T09:11:12+0700')).toBe('2026-10-21T02:11:12.000Z');

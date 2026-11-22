@@ -121,4 +121,34 @@ describe('automatic metadata lookup scheduling', () => {
     expect(sendMessage).toHaveBeenCalledTimes(4);
     for (const resolve of pending.splice(0)) resolve({ metadata: null, status: 'unavailable', diagnostic: 'no_video_date' });
   });
+
+  it('shows an approximate media-ID day immediately while exact lookup continues', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const sendMessage = vi.fn(() => new Promise(() => {}));
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => {}),
+          remove: vi.fn(async () => {}),
+        },
+        onChanged: { addListener: vi.fn() },
+      },
+      runtime: { sendMessage, onMessage: { addListener: vi.fn() } },
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, width: 190, height: 270, left: 0, top: 0, right: 190, bottom: 270,
+      toJSON: () => ({}),
+    } as DOMRect);
+    document.body.innerHTML = '<a href="/@chef/video/7709061097264860434"><img src="x" /><span data-e2e="video-views">7.1K</span></a>';
+
+    const module = await import('./index');
+    shutdown = module.stopTracking;
+    await vi.advanceTimersByTimeAsync(170);
+    const overlay = document.querySelector<HTMLDivElement>('[data-track-view-media="overlay"]')!;
+    expect(overlay.shadowRoot?.querySelector('.date')?.textContent).toContain('≈');
+    expect(overlay.shadowRoot?.querySelector('.date')?.textContent).toContain('2026');
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
 });

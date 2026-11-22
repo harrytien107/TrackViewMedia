@@ -2,6 +2,39 @@ import type { DatePrecision, MetadataSource, Metric, Platform, VideoMetadata } f
 import { identityFromUrl } from './urls';
 
 const instantRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/i;
+const INSTAGRAM_ID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const INSTAGRAM_EPOCH_MS = 1_314_220_021_721n;
+
+function approximateDay(ms: number): string | null {
+  if (!Number.isFinite(ms) || ms < Date.UTC(2011, 0, 1) || ms > Date.now() + 86_400_000) return null;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * Platform media IDs contain an internal creation timestamp. It can precede the
+ * public publication time by seconds or minutes, so expose only an approximate
+ * calendar day and keep the normal metadata resolver running for verification.
+ */
+export function metadataFromPlatformId(platform: Platform, id: string): VideoMetadata {
+  try {
+    if (platform === 'TikTok' && /^\d{16,22}$/.test(id)) {
+      const seconds = Number(BigInt(id) >> 32n);
+      const day = approximateDay(seconds * 1000);
+      return day ? { published_date: day, date_source: 'video_id' } : {};
+    }
+    if (platform === 'Instagram' && /^[A-Za-z0-9_-]{5,20}$/.test(id)) {
+      let mediaId = 0n;
+      for (const char of id) {
+        const value = INSTAGRAM_ID_ALPHABET.indexOf(char);
+        if (value < 0) return {};
+        mediaId = mediaId * 64n + BigInt(value);
+      }
+      const day = approximateDay(Number((mediaId >> 23n) + INSTAGRAM_EPOCH_MS));
+      return day ? { published_date: day, date_source: 'video_id' } : {};
+    }
+  } catch { /* malformed or out-of-range media ID */ }
+  return {};
+}
 
 /** Do not interpret date-only strings or timezone-less clock times as exact instants. */
 export function verifiedTimestamp(value: unknown): string | null {

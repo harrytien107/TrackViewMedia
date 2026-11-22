@@ -3,7 +3,7 @@ import { tiktok } from './adapters/tiktok';
 import { facebook } from './adapters/facebook';
 import { fetchVideoFromPage } from './page-fetch';
 import { contextFromUrl, identityFromUrl } from '../shared/urls';
-import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromScriptTexts, metadataFromVideoHtml } from '../shared/metadata';
+import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromPlatformId, metadataFromScriptTexts, metadataFromVideoHtml } from '../shared/metadata';
 import { allSelections, allVerifiedMetadata, removeSelection, saveSelection, saveVerifiedMetadata, selectionKey, updateSelectedMetadata, verifiedKey, SELECTED_PREFIX, VERIFIED_PREFIX } from '../shared/storage';
 import type { Candidate, PageContext, PageFetchRequest, ResolveRequest, ResolveResponse, VideoMetadata, VideoRecord } from '../shared/types';
 
@@ -53,7 +53,7 @@ function candidateRecord(candidate: Candidate, ctx: PageContext): VideoRecord {
   const username = candidate.identity.username ||
     (ctx.username && profileName(ctx)) ||
     (lastProfile?.platform === ctx.platform ? lastProfile.username : '');
-  const m = candidate.metadata;
+  const m = mergeMetadata(metadataFromPlatformId(ctx.platform, candidate.identity.id), candidate.metadata);
   return {
     platform: ctx.platform, username, video_id: candidate.identity.id, video_url: candidate.identity.url,
     caption: m.caption ?? null, published_at: m.published_at ?? null,
@@ -87,9 +87,12 @@ function render(overlay: Overlay): void {
   const existing = selected.get(key);
   const local = localDate(overlay.record.published_at, overlay.record.published_date, overlay.record.published_relative, overlay.record.published_label ?? null);
   const hasDate = !!datePrecision(overlay.record);
+  const provisionalDate = overlay.record.date_source === 'video_id';
   const loadingDate = !hasDate && (overlay.lookupState === 'queued' || overlay.lookupState === 'loading');
-  const dateText = loadingDate ? 'Loading date...' : local.short;
-  const dateTitle = loadingDate ? 'Automatic publication-date lookup is queued or running.' : local.full;
+  const dateText = loadingDate ? 'Loading date...' : provisionalDate ? `≈ ${local.short}` : local.short;
+  const dateTitle = loadingDate ? 'Automatic publication-date lookup is queued or running.' : provisionalDate
+    ? `Approximate publication day inferred from the platform media ID. Exact metadata verification continues in the background.`
+    : local.full;
   if (overlay.date.textContent !== dateText) overlay.date.textContent = dateText;
   overlay.date.title = `${dateTitle}${overlay.record.date_source ? ` (source: ${overlay.record.date_source})` : ''}`;
   overlay.host.dataset.tvmDateSource = overlay.record.date_source ?? 'unavailable';
@@ -184,7 +187,7 @@ function removeOverlay(overlay: Overlay): void {
 }
 
 function needsFallback(record: VideoRecord): boolean {
-  return (!datePrecision(record) || record.views === null) && !!record.video_url;
+  return (!datePrecision(record) || record.date_source === 'video_id' || record.views === null) && !!record.video_url;
 }
 
 function visible(tile: HTMLElement): boolean {
