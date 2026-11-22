@@ -5,6 +5,7 @@ import { identityFromUrl } from '../shared/urls';
 import { datePrecision, localDate, mergeMetadata, parseUserDate } from '../shared/metadata';
 import { allSelections, clearSelections, saveSelection, saveVerifiedMetadata, SELECTED_PREFIX } from '../shared/storage';
 import { exportFilename, toCsv, toJson } from '../shared/export';
+import { fetchLatestRelease, isNewerVersion, type ReleaseInfo } from '../shared/update';
 import type { PageContext, VideoRecord } from '../shared/types';
 import './popup.css';
 
@@ -34,6 +35,7 @@ function App() {
   const [videoTab, setVideoTab] = useState<{ id: number; url: string } | null>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [manualDate, setManualDate] = useState('');
+  const [update, setUpdate] = useState<ReleaseInfo | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -60,6 +62,19 @@ function App() {
     };
     chrome.storage.onChanged.addListener(handler);
     return () => { active = false; chrome.storage.onChanged.removeListener(handler); };
+  }, []);
+
+  useEffect(() => {
+    if (!chrome.runtime.id) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 5_000);
+    void fetchLatestRelease(controller.signal).then((release) => {
+      if (release && isNewerVersion(chrome.runtime.getManifest().version, release.version)) setUpdate(release);
+    }).catch(() => {}).finally(() => window.clearTimeout(timeout));
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, []);
 
   async function exportRecords(format: 'csv' | 'json') {
@@ -170,6 +185,15 @@ function App() {
           </div>
         </> : <div className="unavailable">Open a supported public profile to see thumbnail badges.</div>}
       </section>
+
+      {update && <section className="update" aria-label="Extension update available">
+        <div>
+          <p className="eyebrow">UPDATE AVAILABLE</p>
+          <strong>TrackViewMedia v{update.version}</strong>
+          <span>Download the latest GitHub release.</span>
+        </div>
+        <button className="primary" onClick={() => void chrome.tabs.create({ url: update.url })}>Update</button>
+      </section>}
 
       {context?.kind === 'video' && <section className="verification" aria-label="Video verification">
         <p className="eyebrow">VERIFY THIS VIDEO</p>

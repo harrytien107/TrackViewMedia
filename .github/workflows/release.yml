@@ -1,0 +1,73 @@
+name: Build release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+      WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          test "v${VERSION}" = "${GITHUB_REF_NAME}"
+
+      - name: Test and build
+        run: |
+          npm test
+          npm run build
+          npm run test:popup
+
+      - name: Package Chromium and unsigned Firefox builds
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p release
+          (cd dist && zip -qr "../release/TrackViewMedia-Chrome-v${VERSION}.zip" .)
+          (cd dist-firefox && zip -qr "../release/TrackViewMedia-Firefox-v${VERSION}-unsigned.xpi" .)
+
+      - name: Sign Firefox build with AMO
+        if: ${{ env.WEB_EXT_API_KEY != '' && env.WEB_EXT_API_SECRET != '' }}
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p signed
+          npx --yes web-ext@8 sign \
+            --source-dir dist-firefox \
+            --artifacts-dir signed \
+            --channel unlisted \
+            --api-key "$WEB_EXT_API_KEY" \
+            --api-secret "$WEB_EXT_API_SECRET"
+          SIGNED_XPI=$(find signed -maxdepth 1 -type f -name '*.xpi' | head -n 1)
+          test -n "$SIGNED_XPI"
+          cp "$SIGNED_XPI" "release/TrackViewMedia-Firefox-v${VERSION}.xpi"
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --generate-notes

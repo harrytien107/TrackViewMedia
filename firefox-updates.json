@@ -1,0 +1,12 @@
+{
+  "addons": {
+    "trackviewmedia@harrytien107.github.io": {
+      "updates": [
+        {
+          "version": "0.2.0",
+          "update_link": "https://github.com/harrytien107/TrackViewMedia/releases/download/v0.2.0/TrackViewMedia-Firefox-v0.2.0.xpi"
+        }
+      ]
+    }
+  }
+}

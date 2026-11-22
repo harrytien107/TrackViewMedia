@@ -35,11 +35,22 @@ try {
   const page = await browser.newPage({ viewport: { width: 400, height: 580 } });
   await page.addInitScript(({ record, extensionManifest }) => {
     const state = { [`selected:${record.platform}:${record.video_id}`]: record };
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      if (String(input).includes('api.github.com/repos/harrytien107/TrackViewMedia/releases/latest')) {
+        return new Response(JSON.stringify({
+          tag_name: 'v0.2.1',
+          html_url: 'https://github.com/harrytien107/TrackViewMedia/releases/tag/v0.2.1',
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return nativeFetch(input, init);
+    };
     window.chrome = {
-      runtime: { getManifest: () => extensionManifest },
+      runtime: { id: 'trackviewmedia-smoke', getManifest: () => extensionManifest },
       tabs: {
         query: async () => [{ url: 'https://www.instagram.com/ssam_kbbq/reels/', id: 1 }],
         sendMessage: async () => ({ platform: 'Instagram', username: 'ssam_kbbq', kind: 'profile' }),
+        create: async (options) => { window.__openedUpdate = options.url; return { id: 9 }; },
       },
       storage: {
         local: {
@@ -65,6 +76,11 @@ try {
   await page.getByText('1', { exact: true }).first().waitFor();
   if (!(await page.locator('body').innerText()).includes('ssam_kbbq')) throw new Error('Current profile missing');
   if (!(await page.locator('body').innerText()).includes(`v${manifest.version}`)) throw new Error('Incorrect popup version');
+  await page.getByText('TrackViewMedia v0.2.1').waitFor();
+  await page.getByRole('button', { name: 'Update' }).click();
+  if (await page.evaluate(() => window.__openedUpdate) !== 'https://github.com/harrytien107/TrackViewMedia/releases/tag/v0.2.1') {
+    throw new Error('Update button did not open the latest GitHub release');
+  }
   await page.getByRole('button', { name: 'Export JSON' }).click();
   await page.getByText('Exported 1 selected video.').waitFor();
   const download = await page.evaluate(() => window.__downloaded);
@@ -140,7 +156,7 @@ try {
     throw new Error('Manual verification was not preserved in exported JSON');
   }
   if (videoErrors.length) throw new Error(`Video popup runtime errors: ${videoErrors.join('; ')}`);
-  console.log('Popup smoke test passed: profile, selection, JSON export, clear, video verification and manual correction.');
+  console.log('Popup smoke test passed: GitHub update notice, profile, selection, JSON export, clear, video verification and manual correction.');
 } finally {
   await browser?.close();
   await new Promise((done) => server.close(done));

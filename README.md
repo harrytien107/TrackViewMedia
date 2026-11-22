@@ -1,6 +1,6 @@
 # TrackViewMedia
 
-A local-only Chrome/Edge **Manifest V3 extension** for public Instagram Reels, TikTok profile videos, and Facebook Reels. It adds a publication-date badge, available view counts, and a selection button to detected video thumbnails. Selections persist across scrolls, tab navigation, and extension reloads.
+A Chrome/Edge **Manifest V3 extension** with a Firefox MV2 build for public Instagram Reels, TikTok profile videos, and Facebook Reels. It adds a publication-date badge, available view counts, and a selection button to detected video thumbnails. Selections persist across scrolls, tab navigation, and extension reloads.
 
 ## Build and install
 
@@ -13,6 +13,10 @@ npm test
 ```
 
 Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**, choose **Load unpacked**, then select the generated **`dist/`** directory. After making changes, rebuild and click the extension's **Reload** icon.
+
+The popup checks the latest GitHub Release when opened. If a newer version exists, it shows an **Update** button that opens the release page. Chrome/Edge installations loaded unpacked or from a GitHub ZIP still require the user to replace/reload the extension files. Browser-managed silent updates require a store or managed deployment.
+
+The Firefox build is generated in **`dist-firefox/`**. Its stable extension ID uses `browser_specific_settings.gecko.update_url` and checks `firefox-updates.json` from this repository. Normal Firefox installs require a Mozilla-signed XPI for automatic updates.
 
 Browse a supported public profile, scroll to load Reels/videos, and use the **+** button on individual thumbnails. In the toolbar popup, choose **Export CSV**, **Export JSON**, or **Clear selection**. Exports include selected videos from all supported profiles, not just the current tab.
 
@@ -45,3 +49,24 @@ These scripts run the built bundles with simulated extension APIs. The live over
 ## Code map
 
 `src/content/adapters/` contains the three independent platform adapters; `src/content/index.ts` manages badges, observers, selection, and SPA navigation; `src/background/index.ts` handles bounded metadata fallback requests/cache; `src/shared/` contains typed records, parsing, storage, exports; `src/popup/` is the React popup. Vite builds the popup and esbuild emits standalone MV3 content/background bundles.
+
+## GitHub releases and updates
+
+Version metadata must match `package.json`, `package-lock.json`, both browser manifests, and `firefox-updates.json`. `npm run build` checks this before producing the browser bundles.
+
+Push a version commit first, then create and push the matching tag:
+
+```bash
+git tag v0.2.0
+git push origin main
+git push origin v0.2.0
+```
+
+The `Build release` GitHub Actions workflow runs the tests, production build, popup smoke test, creates a Chrome/Edge ZIP and Firefox XPI package, writes SHA-256 checksums, and publishes them to GitHub Releases.
+
+For Firefox automatic updates outside AMO, add these repository secrets before tagging a release:
+
+- `WEB_EXT_API_KEY`
+- `WEB_EXT_API_SECRET`
+
+When both are configured, the release workflow asks Mozilla's Add-ons API to sign the Firefox build and publishes it as `TrackViewMedia-Firefox-vX.Y.Z.xpi`. `firefox-updates.json` points Firefox at that signed release asset. Without the signing secrets, the workflow still publishes an unsigned Firefox package for development/testing, but Firefox release builds will not silently install it as an update.
