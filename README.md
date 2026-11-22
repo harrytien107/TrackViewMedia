@@ -14,7 +14,7 @@ npm test
 
 Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**, choose **Load unpacked**, then select the generated **`dist/`** directory. After making changes, rebuild and click the extension's **Reload** icon.
 
-The popup checks the latest GitHub Release when opened. If a newer version exists, it shows an **Update** button that opens the release page. Chrome/Edge installations loaded unpacked or from a GitHub ZIP still require the user to replace/reload the extension files. Browser-managed silent updates require a store or managed deployment.
+Chrome/Edge installations loaded unpacked or from a GitHub ZIP do not self-replace from GitHub. Automatic browser-managed updates require Chrome Web Store, Edge Add-ons, or a managed enterprise deployment. The extension does not show an update popup.
 
 The Firefox build is generated in **`dist-firefox/`**. Its stable extension ID uses `browser_specific_settings.gecko.update_url` and checks `firefox-updates.json` from this repository. Normal Firefox installs require a Mozilla-signed XPI for automatic updates.
 
@@ -57,9 +57,9 @@ Version metadata must match `package.json`, `package-lock.json`, both browser ma
 Push a version commit first, then create and push the matching tag:
 
 ```bash
-git tag v0.2.0
+git tag v0.2.1
 git push origin main
-git push origin v0.2.0
+git push origin v0.2.1
 ```
 
 The `Build release` GitHub Actions workflow runs the tests, production build, popup smoke test, creates a Chrome/Edge ZIP and Firefox XPI package, writes SHA-256 checksums, and publishes them to GitHub Releases.

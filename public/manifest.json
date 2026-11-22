@@ -1,14 +1,13 @@
 {
   "manifest_version": 3,
   "name": "TrackViewMedia",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Show verified publication dates and available views on public Reels and videos; export selected items.",
   "permissions": ["storage", "downloads"],
   "host_permissions": [
     "https://*.instagram.com/*",
     "https://*.tiktok.com/*",
-    "https://*.facebook.com/*",
-    "https://api.github.com/*"
+    "https://*.facebook.com/*"
   ],
   "action": { "default_popup": "popup.html", "default_title": "TrackViewMedia" },
   "background": { "service_worker": "background.js" },

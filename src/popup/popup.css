@@ -13,12 +13,6 @@ header p { color: #9fb0c4; font-size: 11px; margin: 0; }
 .signal { width: 7px; height: 7px; background: #5ddcb5; border-radius: 50%; }
 .username { color: #c1cfde; font-size: 12px; margin: 3px 0 0 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unavailable { color: #c1cfde; font-size: 12px; line-height: 1.5; }
-.update { margin: 0 20px 18px; padding: 13px 14px; border: 1px solid #3d675f; border-radius: 10px; background: #12302f; display: flex; align-items: center; gap: 12px; }
-.update > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.update .eyebrow { margin-bottom: 2px; color: #7fe5c9; }
-.update strong { font-size: 13px; }
-.update span { color: #acc4c2; font-size: 10px; }
-.update button { padding: 9px 12px; white-space: nowrap; }
 .summary { margin: 0 20px 22px; padding: 14px 18px; border-radius: 11px; border: 1px solid #2d4154; background: #142335; display: flex; align-items: center; }
 .summary > div:not(.divider) { flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .summary strong { font-size: 27px; line-height: 1.2; }
