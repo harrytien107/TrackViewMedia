@@ -1,9 +1,46 @@
 // Visual and interactive smoke test of the built popup with simulated extension APIs.
 // This is NOT live-site validation or a replacement for loading dist/ as an extension.
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { resolve, extname, sep } from 'node:path';
+import { access, readFile } from 'node:fs/promises';
+import { delimiter, resolve, extname, sep } from 'node:path';
 import { chromium } from 'playwright-core';
+
+async function findChromeExecutable() {
+  const explicit = [
+    process.env.CHROME_PATH,
+    process.env.CHROMIUM_PATH,
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+  ].filter(Boolean);
+
+  const commandNames = process.platform === 'win32'
+    ? ['chrome.exe', 'msedge.exe', 'thorium.exe']
+    : ['chrome', 'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'];
+  const pathCandidates = (process.env.PATH ?? '')
+    .split(delimiter)
+    .filter(Boolean)
+    .flatMap((directory) => commandNames.map((name) => resolve(directory, name)));
+
+  const platformCandidates = process.platform === 'win32'
+    ? [
+        process.env.PROGRAMFILES && resolve(process.env.PROGRAMFILES, 'Google/Chrome/Application/chrome.exe'),
+        process.env['PROGRAMFILES(X86)'] && resolve(process.env['PROGRAMFILES(X86)'], 'Google/Chrome/Application/chrome.exe'),
+        process.env.LOCALAPPDATA && resolve(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe'),
+      ]
+    : process.platform === 'darwin'
+      ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+      : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
+
+  for (const candidate of [...explicit, ...pathCandidates, ...platformCandidates].filter(Boolean)) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // Keep looking for another installed Chromium-based browser.
+    }
+  }
+
+  throw new Error('No Chromium-based browser found. Set CHROME_PATH to the browser executable.');
+}
 
 const root = resolve('dist');
 const manifest = JSON.parse(await readFile(resolve(root, 'manifest.json'), 'utf8'));
@@ -28,9 +65,10 @@ const sample = {
 let browser;
 try {
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const executablePath = await findChromeExecutable();
   browser = await chromium.launch({
     headless: true,
-    executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    executablePath,
   });
   const page = await browser.newPage({ viewport: { width: 400, height: 580 } });
   await page.addInitScript(({ record, extensionManifest }) => {

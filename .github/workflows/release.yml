@@ -26,6 +26,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Set up Chrome for popup smoke test
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+
       - name: Verify tag matches package version
         shell: bash
         run: |
@@ -46,12 +51,6 @@ jobs:
           (cd dist && zip -qr "../release/TrackViewMedia-Chrome-v${VERSION}.zip" .)
           (cd dist-firefox && zip -qr "../release/TrackViewMedia-Firefox-v${VERSION}-unsigned.xpi" .)
           (cd dist-thorium && zip -qr "../release/TrackViewMedia-Thorium-v${VERSION}-unpacked.zip" .)
-
-      - name: Set up Chrome for Thorium CRX packaging
-        if: ${{ env.THORIUM_EXTENSION_KEY_B64 != '' }}
-        uses: browser-actions/setup-chrome@v2
-        with:
-          chrome-version: stable
 
       - name: Package signed Thorium CRX
         if: ${{ env.THORIUM_EXTENSION_KEY_B64 != '' }}
