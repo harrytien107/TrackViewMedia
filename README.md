@@ -81,4 +81,4 @@ Thorium releases must always use the same private signing key so the extension I
 - Selections are stored locally in the browser
 - Metadata requests are limited to the supported social platforms
 
-**Current version: v0.2.6**
+**Current version: v0.2.7**

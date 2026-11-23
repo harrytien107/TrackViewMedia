@@ -14,9 +14,10 @@ const MAX_PER_WINDOW: Record<Platform, number> = {
   Instagram: 12,
   TikTok: 12,
   Facebook: 30,
-  YouTube: 120,
+  YouTube: Number.POSITIVE_INFINITY,
 };
 const MIN_GAP_MS = 300;
+const YOUTUBE_MIN_GAP_MS = 500;
 const MAX_CONCURRENT = 3;
 let activeWork = 0;
 const workWaiters: Array<() => void> = [];
@@ -92,6 +93,13 @@ async function queue<T>(task: () => Promise<T>): Promise<T> {
 function reserveRequest(platform: Platform): Promise<number | null> {
   const previous = rateWork.get(platform) ?? Promise.resolve();
   const result = previous.then(async () => {
+    if (platform === 'YouTube') {
+      const platformLastRequest = lastRequest.get(platform) ?? 0;
+      const delay = Math.max(0, YOUTUBE_MIN_GAP_MS - (Date.now() - platformLastRequest));
+      if (delay) await new Promise((done) => setTimeout(done, delay));
+      lastRequest.set(platform, Date.now());
+      return null;
+    }
     const key = `${RATE_KEY_PREFIX}${platform}`;
     const now = Date.now();
     const state = await chrome.storage.local.get(key);

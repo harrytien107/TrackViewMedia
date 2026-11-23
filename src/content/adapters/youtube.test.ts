@@ -30,18 +30,26 @@ describe('YouTube Shorts adapter', () => {
     vi.restoreAllMocks();
   });
 
-  it('reads the visible Shorts view text even without aria-label metadata', () => {
+  it('reads view text from the Shorts wrapper when metadata is a sibling of the thumbnail link', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 0, y: 0, width: 190, height: 338, left: 0, top: 0, right: 190, bottom: 338,
       toJSON: () => ({}),
     } as DOMRect);
     document.body.innerHTML = `
-      <yt-lockup-view-model>
-        <a href="/shorts/ZyX_987-abc"><img alt="Steak short" src="x"></a>
-        <div class="shortsLockupViewModelHostMetadataSubhead"><span>7.4K views</span></div>
-      </yt-lockup-view-model>`;
+      <ytm-shorts-lockup-view-model class="shortsLockupViewModelHost">
+        <a class="shortsLockupViewModelHostEndpoint reel-item-endpoint" href="/shorts/ZyX_987-abc">
+          <img alt="Steak short" src="x">
+        </a>
+        <div class="shortsLockupViewModelHostOutsideMetadata">
+          <div class="shortsLockupViewModelHostOutsideMetadataSubhead shortsLockupViewModelHostMetadataSubhead">
+            <span>7.4K views</span>
+          </div>
+        </div>
+      </ytm-shorts-lockup-view-model>`;
 
-    expect(youtube.discover()[0].metadata).toMatchObject({
+    const candidate = youtube.discover()[0];
+    expect(candidate.tile.tagName).toBe('YTM-SHORTS-LOCKUP-VIEW-MODEL');
+    expect(candidate.metadata).toMatchObject({
       views: '7.4K', views_exact: false, views_source: 'tile',
     });
     vi.restoreAllMocks();

@@ -53,7 +53,7 @@ describe('metadata fallback cache', () => {
 });
 
 describe('tab-origin metadata fallback', () => {
-  it('accepts a YouTube Short and keeps its resolver rate state independent', async () => {
+  it('accepts a YouTube Short without persisting request-count rate state', async () => {
     vi.resetModules();
     const state: Record<string, unknown> = {};
     let listener: ((request: unknown, sender: chrome.runtime.MessageSender,
@@ -88,11 +88,11 @@ describe('tab-origin metadata fallback', () => {
     expect(result.status).toBe('resolved');
     expect(result.metadata.published_date).toBe('2026-11-18');
     expect(pageFetch).toHaveBeenCalledOnce();
-    expect(state['metadata_request_history:YouTube']).toBeDefined();
+    expect(state['metadata_request_history:YouTube']).toBeUndefined();
     vi.unstubAllGlobals();
   });
 
-  it('allows YouTube fallback beyond 30 requests but caps it at 120 per five minutes', async () => {
+  it('does not impose a fixed local request-count ceiling on YouTube fallback', async () => {
     vi.resetModules();
     const now = Date.now();
     const state: Record<string, unknown> = {
@@ -132,8 +132,8 @@ describe('tab-origin metadata fallback', () => {
     expect(result.status).toBe('resolved');
     expect(pageFetch).toHaveBeenCalledOnce();
 
-    state['metadata_request_history:YouTube'] = Array.from({ length: 120 }, (_, index) => now - index * 1000);
-    const limited = await new Promise<{ status: string }>((resolve) => listener?.(
+    state['metadata_request_history:YouTube'] = Array.from({ length: 500 }, (_, index) => now - index * 1000);
+    const second = await new Promise<{ status: string }>((resolve) => listener?.(
       {
         type: 'resolve-metadata',
         platform: 'YouTube',
@@ -143,8 +143,8 @@ describe('tab-origin metadata fallback', () => {
       { tab: { id: 8 }, url: 'https://www.youtube.com/@SSam-2026/shorts' } as chrome.runtime.MessageSender,
       resolve as (value: unknown) => void,
     ));
-    expect(limited.status).toBe('rate_limited');
-    expect(pageFetch).toHaveBeenCalledOnce();
+    expect(second.status).toBe('resolved');
+    expect(pageFetch).toHaveBeenCalledTimes(2);
     vi.unstubAllGlobals();
   });
 

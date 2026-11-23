@@ -6,8 +6,9 @@ const TILE_SELECTOR = [
   'ytd-rich-grid-slim-media',
   'ytd-reel-item-renderer',
   'yt-lockup-view-model',
+  'ytm-shorts-lockup-view-model-v2',
   'ytm-shorts-lockup-view-model',
-  '[class*="shortsLockupViewModel"]',
+  '[class*="shortsLockupViewModel"]:not(a)',
 ].join(', ');
 
 function tileFor(anchor: HTMLAnchorElement): HTMLElement | null {
