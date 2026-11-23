@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: trackviewmedia-release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -37,6 +41,18 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           test "v${VERSION}" = "${GITHUB_REF_NAME}"
 
+      - name: Require and verify Thorium signing key
+        shell: bash
+        run: |
+          if [ -z "$THORIUM_EXTENSION_KEY_B64" ]; then
+            echo "::error::THORIUM_EXTENSION_KEY_B64 is required for stable releases"
+            exit 1
+          fi
+          mkdir -p keys
+          printf '%s' "$THORIUM_EXTENSION_KEY_B64" | base64 --decode > keys/thorium-extension.pem
+          chmod 600 keys/thorium-extension.pem
+          node scripts/setup-thorium-key.mjs --key keys/thorium-extension.pem
+
       - name: Test and build
         run: |
           npm test
@@ -53,18 +69,16 @@ jobs:
           (cd dist-thorium && zip -qr "../release/TrackViewMedia-Thorium-v${VERSION}-unpacked.zip" .)
 
       - name: Package signed Thorium CRX
-        if: ${{ env.THORIUM_EXTENSION_KEY_B64 != '' }}
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          mkdir -p keys
-          printf '%s' "$THORIUM_EXTENSION_KEY_B64" | base64 --decode > keys/thorium-extension.pem
-          chmod 600 keys/thorium-extension.pem
-          node scripts/setup-thorium-key.mjs
-          git diff --exit-code -- manifests/thorium-mv2.json thorium-updates.xml
           chrome --pack-extension="$PWD/dist-thorium" --pack-extension-key="$PWD/keys/thorium-extension.pem" --no-sandbox
           test -f dist-thorium.crx
           mv dist-thorium.crx "release/TrackViewMedia-Thorium-v${VERSION}.crx"
+          node scripts/setup-thorium-key.mjs \
+            --key keys/thorium-extension.pem \
+            --crx "release/TrackViewMedia-Thorium-v${VERSION}.crx" \
+            --output release/thorium-updates.xml
 
       - name: Sign Firefox build with AMO
         if: ${{ env.WEB_EXT_API_KEY != '' && env.WEB_EXT_API_SECRET != '' }}
@@ -92,3 +106,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --generate-notes
+
+      - name: Verify published Thorium CRX
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          ASSET="TrackViewMedia-Thorium-v${VERSION}.crx"
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fx "$ASSET"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/${ASSET}"
+          curl --fail --location --retry 3 --output /tmp/published.crx "$URL"
+          test "$(sha256sum "release/${ASSET}" | cut -d' ' -f1)" = "$(sha256sum /tmp/published.crx | cut -d' ' -f1)"
+
+      - name: Publish stable Thorium update feed
+        shell: bash
+        run: |
+          cp release/thorium-updates.xml /tmp/thorium-updates.xml
+          git fetch origin main
+          git switch --force-create update-feed origin/main
+          VERSION=$(node -p "require('./package.json').version")
+          CURRENT_VERSION=$(node -e 'const fs=require("fs"); const xml=fs.readFileSync("thorium-updates.xml","utf8"); console.log(xml.match(/<updatecheck\\b[^>]*\\bversion="([^"]+)"/)?.[1] ?? "0.0.0")')
+          if [ "$(printf '%s\n%s\n' "$CURRENT_VERSION" "$VERSION" | sort -V | tail -n 1)" != "$VERSION" ]; then
+            echo "Stable Thorium feed is already newer (${CURRENT_VERSION}); leaving it unchanged."
+            exit 0
+          fi
+          cp /tmp/thorium-updates.xml thorium-updates.xml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add thorium-updates.xml
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: publish Thorium update ${GITHUB_REF_NAME}"
+            git push origin HEAD:main
+          fi

@@ -18,6 +18,8 @@ TrackViewMedia shows **publication dates**, **view counts**, and **selection/exp
 
 Thorium uses the extension's MV2 update channel and can receive newer signed CRX releases automatically.
 
+After the signed CRX is installed once, Thorium handles later stable updates in the background from TrackViewMedia's self-hosted update feed. There is no TrackViewMedia update popup.
+
 > `Load unpacked` is for development and does not auto-update.
 
 ### Chrome / Edge
@@ -71,9 +73,11 @@ npm run build
 
 ## Releases
 
-GitHub Actions can package Chrome, Firefox, and Thorium builds when a version tag is pushed.
+GitHub Actions packages Chrome, Firefox, and Thorium builds when a version tag is pushed. A stable release requires the `THORIUM_EXTENSION_KEY_B64` repository secret so every Thorium CRX keeps the same extension identity.
 
-Thorium releases must always use the same private signing key so the extension ID stays unchanged. The local key is stored at `keys/thorium-extension.pem` and is excluded from Git.
+The workflow publishes the signed CRX first, verifies the published asset, and only then advances `thorium-updates.xml`. The Thorium extension ID is pinned to `emnohnennfenceofedpnifgfjnbagdig`.
+
+Thorium releases must always use the same private signing key. The local key is stored at `keys/thorium-extension.pem` and is excluded from Git.
 
 ## Privacy
 
@@ -81,4 +85,4 @@ Thorium releases must always use the same private signing key so the extension I
 - Selections are stored locally in the browser
 - Metadata requests are limited to the supported social platforms
 
-**Current version: v0.2.8**
+**Current version: v0.3.0**
