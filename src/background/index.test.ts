@@ -11,6 +11,45 @@ describe('metadata fallback cache', () => {
     expect(cacheLifetime({ published_at: '2026-10-21T02:11:12.000Z', views: 100 })).toBe(7 * 24 * 60 * 60_000);
     vi.unstubAllGlobals();
   });
+
+  it('deletes expired fallback entries and caps transient cache size', async () => {
+    vi.resetModules();
+    const now = Date.now();
+    const state: Record<string, unknown> = {
+      'metadata:v5:Instagram:expired': { timestamp: now - 8 * 24 * 60 * 60_000, metadata: { published_date: '2026-01-01' } },
+      'metadata:v5:TikTok:expired': { timestamp: now - 20 * 60_000, metadata: null },
+      'metadata:v5:Facebook:expired': { timestamp: now - 20 * 60_000, metadata: { views: '1K' } },
+      'metadata:v5:YouTube:expired': { timestamp: now - 20 * 60_000, metadata: null },
+      'verified:Facebook:keep': { published_date: '2026-11-01' },
+      'selected:Facebook:keep': { video_id: 'keep' },
+    };
+    for (let index = 0; index < 125; index += 1) {
+      state[`metadata:v5:YouTube:fresh-${index}`] = {
+        timestamp: now - index * 1000,
+        metadata: { published_date: '2026-11-18' },
+      };
+    }
+    vi.stubGlobal('chrome', {
+      storage: { local: {
+        get: async (key: string | null) => key === null ? { ...state } : { [key]: state[key] },
+        set: async (entries: Record<string, unknown>) => { Object.assign(state, entries); },
+        remove: async (keys: string | string[]) => {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete state[key];
+        },
+      } },
+      runtime: { onMessage: { addListener: vi.fn() } },
+    });
+    const { cleanupFallbackCache } = await import('./index');
+    expect(await cleanupFallbackCache(now)).toBe(120);
+    expect(Object.keys(state).filter((key) => key.startsWith('metadata:v5:'))).toHaveLength(120);
+    expect(state['metadata:v5:Instagram:expired']).toBeUndefined();
+    expect(state['metadata:v5:TikTok:expired']).toBeUndefined();
+    expect(state['metadata:v5:Facebook:expired']).toBeUndefined();
+    expect(state['metadata:v5:YouTube:expired']).toBeUndefined();
+    expect(state['verified:Facebook:keep']).toBeDefined();
+    expect(state['selected:Facebook:keep']).toBeDefined();
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('tab-origin metadata fallback', () => {
@@ -50,6 +89,48 @@ describe('tab-origin metadata fallback', () => {
     expect(result.metadata.published_date).toBe('2026-11-18');
     expect(pageFetch).toHaveBeenCalledOnce();
     expect(state['metadata_request_history:YouTube']).toBeDefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps actual YouTube page fallbacks within 30 requests per five minutes', async () => {
+    vi.resetModules();
+    const now = Date.now();
+    const state: Record<string, unknown> = {
+      'metadata_request_history:YouTube': Array.from({ length: 30 }, (_, index) => now - index * 1000),
+    };
+    let listener: ((request: unknown, sender: chrome.runtime.MessageSender,
+      respond: (value: unknown) => void) => boolean) | undefined;
+    const pageFetch = vi.fn(async () => ({
+      metadata: { published_date: '2026-11-18', date_source: 'video_page' },
+      diagnostic: 'matched_video_date',
+    }));
+    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage: pageFetch },
+      storage: { local: {
+        get: async (key: string | null) => key === null ? { ...state } : { [key]: state[key] },
+        set: async (entries: Record<string, unknown>) => { Object.assign(state, entries); },
+        remove: async (keys: string | string[]) => {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete state[key];
+        },
+      } },
+      runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } },
+    });
+    await import('./index');
+
+    const result = await new Promise<{ status: string }>((resolve) => listener?.(
+      {
+        type: 'resolve-metadata',
+        platform: 'YouTube',
+        id: 'AbC_123-def',
+        url: 'https://www.youtube.com/shorts/AbC_123-def',
+      },
+      { tab: { id: 8 }, url: 'https://www.youtube.com/@SSam-2026/shorts' } as chrome.runtime.MessageSender,
+      resolve as (value: unknown) => void,
+    ));
+
+    expect(result.status).toBe('rate_limited');
+    expect(pageFetch).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 

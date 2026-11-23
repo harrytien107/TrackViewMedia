@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromPlatformId, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, parseUserDate, verifiedTimestamp } from './metadata';
+import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromPlatformId, metadataFromScriptTexts, metadataFromStructuredData, metadataFromTile, metadataFromVideoHtml, parseMetric, parseUserDate, verifiedTimestamp, youtubeProfileMetadataFromScriptTexts } from './metadata';
 
 describe('publication times', () => {
   it('derives only an approximate day from Instagram and TikTok media IDs', () => {
@@ -203,6 +203,30 @@ describe('metadata extraction', () => {
       date_source: 'video_page',
     });
     expect(metadataFromVideoHtml(html, 'different-id', 'YouTube').published_date).toBeUndefined();
+  });
+
+  it('bulk-indexes more than 30 Shorts from ytInitialData without per-video lookups', () => {
+    const shorts = Array.from({ length: 36 }, (_, index) => {
+      const videoId = `Short${String(index).padStart(5, '0')}`;
+      return {
+        richItemRenderer: {
+          content: {
+            shortsLockupViewModel: {
+              onTap: { innertubeCommand: { reelWatchEndpoint: { videoId } } },
+              publishedTimeText: { simpleText: `Nov ${String((index % 20) + 1)}, 2026` },
+              overlayMetadata: { secondaryText: { content: `${index + 1}K views` } },
+            },
+          },
+        },
+      };
+    });
+    const script = `var ytInitialData = ${JSON.stringify({ contents: shorts })};`;
+    const found = youtubeProfileMetadataFromScriptTexts([script]);
+    expect(found).toHaveLength(36);
+    expect(found.get('Short00000')).toMatchObject({
+      published_date: '2026-11-01', date_source: 'embedded', views: '1K', views_source: 'embedded',
+    });
+    expect(found.get('Short00035')?.published_date).toBe('2026-11-16');
   });
 
   it('matches an Instagram Reel post date without using comment timestamps', () => {

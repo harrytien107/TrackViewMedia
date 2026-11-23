@@ -71,4 +71,60 @@ describe('YouTube Shorts content integration', () => {
     expect(overlays()[1].shadowRoot?.querySelector('.date')?.textContent).toContain('2026');
     expect(overlays()[1].shadowRoot?.querySelector('.views')?.textContent).toBe('≈ 2.3K views');
   });
+
+  it('uses profile hydration for more than 30 Shorts without consuming fallback requests', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const stored: Record<string, unknown> = {};
+    const sendMessage = vi.fn();
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async (key: string | null) => key === null ? { ...stored } : { [key]: stored[key] }),
+          set: vi.fn(async (entries: Record<string, unknown>) => { Object.assign(stored, entries); }),
+          remove: vi.fn(async (keys: string | string[]) => {
+            for (const key of Array.isArray(keys) ? keys : [keys]) delete stored[key];
+          }),
+        },
+        onChanged: { addListener: vi.fn() },
+      },
+      runtime: { sendMessage, onMessage: { addListener: vi.fn() } },
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, width: 190, height: 338, left: 0, top: 0, right: 190, bottom: 338,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    const items = Array.from({ length: 36 }, (_, index) => {
+      const id = `Short${String(index).padStart(5, '0')}`;
+      return {
+        id,
+        renderer: {
+          shortsLockupViewModel: {
+            onTap: { innertubeCommand: { reelWatchEndpoint: { videoId: id } } },
+            publishedTimeText: { simpleText: `Nov ${String((index % 20) + 1)}, 2026` },
+          },
+        },
+      };
+    });
+    document.body.innerHTML = `
+      <script>var ytInitialData = ${JSON.stringify({ contents: items.map((item) => item.renderer) })};</script>
+      <section>${items.map((item) => `
+        <ytd-rich-grid-slim-media>
+          <a href="/shorts/${item.id}"><img alt="Short ${item.id}"></a>
+          <span aria-label="1.2K views">1.2K views</span>
+        </ytd-rich-grid-slim-media>`).join('')}</section>`;
+
+    const module = await import('./index');
+    shutdown = module.stopTracking;
+    await vi.advanceTimersByTimeAsync(180);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const overlays = document.querySelectorAll<HTMLDivElement>('[data-track-view-media="overlay"]');
+    expect(overlays).toHaveLength(36);
+    expect(Array.from(overlays).every((overlay) =>
+      overlay.shadowRoot?.querySelector('.date')?.textContent?.includes('2026'))).toBe(true);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
 });

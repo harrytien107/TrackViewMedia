@@ -4,7 +4,7 @@ import { facebook } from './adapters/facebook';
 import { youtube } from './adapters/youtube';
 import { fetchVideoFromPage } from './page-fetch';
 import { contextFromUrl, identityFromUrl } from '../shared/urls';
-import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromPlatformId, metadataFromScriptTexts, metadataFromVideoHtml } from '../shared/metadata';
+import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromPlatformId, metadataFromScriptTexts, metadataFromVideoHtml, youtubeProfileMetadataFromScriptTexts } from '../shared/metadata';
 import { allSelections, allVerifiedMetadata, removeSelection, saveSelection, saveVerifiedMetadata, selectionKey, updateSelectedMetadata, verifiedKey, SELECTED_PREFIX, VERIFIED_PREFIX } from '../shared/storage';
 import type { Candidate, PageContext, PageFetchRequest, ResolveRequest, ResolveResponse, VideoMetadata, VideoRecord } from '../shared/types';
 
@@ -23,6 +23,8 @@ let fallbackActive = 0;
 let scriptsVersion = 0;
 let facebookTrackingVersion = -1;
 let facebookTrackingCache = new Map<string, VideoMetadata>();
+let youtubeProfileVersion = -1;
+let youtubeProfileCache = new Map<string, VideoMetadata>();
 let currentHref = '';
 let lastProfile: { platform: string; username: string } | null = null;
 let scanScheduled = false;
@@ -290,6 +292,7 @@ function refreshScripts(): void {
   scripts = updated;
   scriptsVersion += 1;
   facebookTrackingVersion = -1;
+  youtubeProfileVersion = -1;
 }
 
 function facebookProfileMetadata(): Map<string, VideoMetadata> {
@@ -298,6 +301,14 @@ function facebookProfileMetadata(): Map<string, VideoMetadata> {
     facebookTrackingVersion = scriptsVersion;
   }
   return facebookTrackingCache;
+}
+
+function youtubeProfileMetadata(): Map<string, VideoMetadata> {
+  if (youtubeProfileVersion !== scriptsVersion) {
+    youtubeProfileCache = youtubeProfileMetadataFromScriptTexts(scripts, parsedScripts);
+    youtubeProfileVersion = scriptsVersion;
+  }
+  return youtubeProfileCache;
 }
 
 async function verifyCurrentVideo(): Promise<{
@@ -393,14 +404,16 @@ function scan(): void {
   }
   const candidates = adapters[ctx.platform].discover();
   const facebookMetadata = ctx.platform === 'Facebook' ? facebookProfileMetadata() : null;
+  const youtubeMetadata = ctx.platform === 'YouTube' ? youtubeProfileMetadata() : null;
   for (const candidate of candidates) {
     const existing = overlays.get(candidate.anchor);
     if (existing && (existing.record.video_id !== candidate.identity.id || existing.tile !== candidate.tile)) {
       removeOverlay(existing);
     }
     if (!structuredCache.has(candidate.identity.id)) {
-      const profileMetadata = facebookMetadata?.get(candidate.identity.id) ?? {};
-      const genericMetadata = ctx.platform === 'Facebook' && datePrecision(profileMetadata)
+      const profileMetadata = facebookMetadata?.get(candidate.identity.id) ??
+        youtubeMetadata?.get(candidate.identity.id) ?? {};
+      const genericMetadata = datePrecision(profileMetadata)
         ? {} : metadataFromScriptTexts(scripts, candidate.identity.id, ctx.platform, parsedScripts);
       structuredCache.set(candidate.identity.id, mergeMetadata(profileMetadata, genericMetadata));
     }

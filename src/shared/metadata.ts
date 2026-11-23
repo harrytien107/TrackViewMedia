@@ -449,6 +449,137 @@ export function facebookTrackingMetadataFromScriptTexts(
   return found;
 }
 
+function textFromRenderer(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const node = value as Record<string, unknown>;
+  for (const key of ['simpleText', 'content', 'text']) {
+    if (typeof node[key] === 'string' && node[key].trim()) return node[key].trim();
+  }
+  if (Array.isArray(node.runs)) {
+    const text = node.runs.map((run) =>
+      run && typeof run === 'object' && typeof (run as Record<string, unknown>).text === 'string'
+        ? (run as Record<string, unknown>).text : '').join('').trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function youtubeCandidateVideoId(node: Record<string, unknown>): string | null {
+  const ids = new Set<string>();
+  const stack: Array<{ value: unknown; depth: number }> = [{ value: node, depth: 0 }];
+  const seen = new Set<object>();
+  let visited = 0;
+  while (stack.length && visited++ < 300) {
+    const { value, depth } = stack.pop()!;
+    if (!value || typeof value !== 'object' || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      if (depth < 7) for (const child of value) stack.push({ value: child, depth: depth + 1 });
+      continue;
+    }
+    const current = value as Record<string, unknown>;
+    if (typeof current.videoId === 'string' && /^[A-Za-z0-9_-]{6,20}$/.test(current.videoId)) {
+      ids.add(current.videoId);
+      if (ids.size > 1) return null;
+    }
+    if (depth < 7) {
+      for (const child of Object.values(current)) {
+        if (child && typeof child === 'object') stack.push({ value: child, depth: depth + 1 });
+      }
+    }
+  }
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+function youtubeCandidateMetadata(node: Record<string, unknown>): VideoMetadata {
+  let out = extractItem(node, 'YouTube');
+  const stack: Array<{ value: unknown; depth: number }> = [{ value: node, depth: 0 }];
+  const seen = new Set<object>();
+  let visited = 0;
+  while (stack.length && visited++ < 500) {
+    const { value, depth } = stack.pop()!;
+    if (!value || typeof value !== 'object' || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      if (depth < 7) for (const child of value) stack.push({ value: child, depth: depth + 1 });
+      continue;
+    }
+    const current = value as Record<string, unknown>;
+    out = mergeMetadata(out, extractItem(current, 'YouTube'));
+    for (const [key, child] of Object.entries(current)) {
+      const text = textFromRenderer(child);
+      if (text && /^(?:publishedTimeText|publishTimeText|dateText|uploadDate|publishDate|datePublished)$/i.test(key)) {
+        const timestamp = verifiedTimestamp(text);
+        const day = verifiedCalendarDate(text);
+        const relative = verifiedRelativeDate(text);
+        const label = verifiedDateLabel(text);
+        out = mergeMetadata(out, {
+          ...(timestamp ? { published_at: timestamp } : {}),
+          ...(day ? { published_date: day } : {}),
+          ...(relative ? { published_relative: relative } : {}),
+          ...(label ? { published_label: label } : {}),
+        });
+      }
+      if (text && (/(?:viewCountText|shortViewCountText|viewsText)/i.test(key) || /\bviews?\b/i.test(text))) {
+        const match = text.match(/\d[\d,.]*\s*[KMB]?/i);
+        if (match) metricFields(out, 'views', match[0]);
+      }
+      if (depth < 7 && child && typeof child === 'object') stack.push({ value: child, depth: depth + 1 });
+    }
+  }
+  return withSource(out, 'embedded');
+}
+
+/** Build one YouTube Shorts metadata index from ytInitialData/profile hydration. */
+export function youtubeProfileMetadataFromScriptTexts(
+  texts: string[], parsedCache?: Map<string, unknown>,
+): Map<string, VideoMetadata> {
+  const found = new Map<string, VideoMetadata>();
+  const rendererKeys = new Set(['shortsLockupViewModel', 'reelItemRenderer', 'gridVideoRenderer']);
+  for (const text of texts) {
+    if (text.length > 2_000_000 ||
+        !/(?:ytInitialData|shortsLockupViewModel|reelItemRenderer|gridVideoRenderer)/.test(text)) continue;
+    try {
+      const raw = unwrapScriptJson(text);
+      if (!raw) continue;
+      let data: unknown;
+      if (parsedCache?.has(raw)) data = parsedCache.get(raw);
+      else {
+        data = JSON.parse(raw);
+        parsedCache?.set(raw, data);
+      }
+      const stack: unknown[] = [data];
+      const seen = new Set<object>();
+      let visited = 0;
+      while (stack.length && visited++ < 80_000) {
+        const value = stack.pop();
+        if (!value || typeof value !== 'object' || seen.has(value)) continue;
+        seen.add(value);
+        if (Array.isArray(value)) {
+          for (const child of value) if (child && typeof child === 'object') stack.push(child);
+          continue;
+        }
+        const node = value as Record<string, unknown>;
+        for (const [key, child] of Object.entries(node)) {
+          if (rendererKeys.has(key) && child && typeof child === 'object' && !Array.isArray(child)) {
+            const renderer = child as Record<string, unknown>;
+            const id = youtubeCandidateVideoId(renderer);
+            if (id) {
+              const metadata = youtubeCandidateMetadata(renderer);
+              if (datePrecision(metadata) || metadata.views !== undefined) {
+                found.set(id, mergeMetadata(found.get(id) ?? {}, metadata));
+              }
+            }
+          }
+          if (child && typeof child === 'object') stack.push(child);
+        }
+      }
+    } catch { /* invalid YouTube hydration payload */ }
+  }
+  return found;
+}
+
 function facebookStoryHasConflictingVideo(story: Record<string, unknown>, id: string): boolean {
   const videoIds: unknown[] = [];
   if (story.video && typeof story.video === 'object') videoIds.push((story.video as Record<string, unknown>).id);

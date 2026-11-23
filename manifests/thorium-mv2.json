@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "TrackViewMedia (Thorium)",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Show verified publication dates and available views on public Reels, videos, and YouTube Shorts; export selected items.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtxUmPMdK0SPvu02v0fmSTVEs7ab+g2OtPaKzvEfFRqQpg5ifoLmBTbvpQ3hXlRNvZJ3V+A7hvPaZxirqPQtuVskrccrCfWa7Qr4G7nM4gGtXyAXuK3H3pKpBeG/KI1NjCXS/T4UbvaV4L1fbvBBPtjCbITIDhTH6fAJbnOwGN0H01gW0+z/sKPrr8R0zAZxn6LgY1Zb48nopMTQ4NLV+REy+4q95vsDFkOrhFnoOY6NnfH3QONJaVPw+P0Fttr9nxueHk24Wm/OG1vbyxIYFIxYs/rypX+fNQOFk5MwuXxoc83D1ZeypYjbaZKcuX0lZs+wsRFlsEDSXEST6dzWpOQIDAQAB",
   "update_url": "https://raw.githubusercontent.com/harrytien107/TrackViewMedia/main/thorium-updates.xml",

@@ -8,6 +8,7 @@ const RATE_KEY_PREFIX = 'metadata_request_history:';
 const POSITIVE_TTL = 7 * 24 * 60 * 60_000;
 const PARTIAL_TTL = 10 * 60_000;
 const NEGATIVE_TTL = 15 * 60_000;
+const MAX_FALLBACK_CACHE_ENTRIES = 120;
 const WINDOW_MS = 5 * 60_000;
 const MAX_PER_WINDOW: Record<Platform, number> = {
   Instagram: 12,
@@ -22,6 +23,8 @@ const workWaiters: Array<() => void> = [];
 const lastRequest = new Map<Platform, number>();
 const rateWork = new Map<Platform, Promise<void>>();
 const pending = new Map<string, Promise<ResolveResponse>>();
+let fallbackCacheCount = 0;
+let fallbackCacheCleanup: Promise<void> | null = null;
 
 type CacheEntry = { timestamp: number; metadata: VideoMetadata | null; diagnostic?: string };
 
@@ -31,6 +34,36 @@ export function cacheLifetime(metadata: VideoMetadata | null): number {
     return POSITIVE_TTL;
   }
   return PARTIAL_TTL;
+}
+
+export async function cleanupFallbackCache(now = Date.now()): Promise<number> {
+  const entries = await chrome.storage.local.get(null);
+  const candidates: Array<{ key: string; timestamp: number; metadata: VideoMetadata | null }> = [];
+  const remove = new Set<string>();
+  for (const [key, value] of Object.entries(entries)) {
+    if (!key.startsWith(CACHE_PREFIX)) continue;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      remove.add(key);
+      continue;
+    }
+    const entry = value as Partial<CacheEntry>;
+    if (typeof entry.timestamp !== 'number' || now - entry.timestamp >= cacheLifetime(entry.metadata ?? null)) {
+      remove.add(key);
+      continue;
+    }
+    candidates.push({ key, timestamp: entry.timestamp, metadata: entry.metadata ?? null });
+  }
+  candidates.sort((a, b) => b.timestamp - a.timestamp);
+  for (const entry of candidates.slice(MAX_FALLBACK_CACHE_ENTRIES)) remove.add(entry.key);
+  if (remove.size) await chrome.storage.local.remove([...remove]);
+  return Math.min(candidates.length, MAX_FALLBACK_CACHE_ENTRIES);
+}
+
+async function ensureFallbackCacheCleanup(): Promise<void> {
+  if (!fallbackCacheCleanup) {
+    fallbackCacheCleanup = cleanupFallbackCache().then((count) => { fallbackCacheCount = count; });
+  }
+  await fallbackCacheCleanup;
 }
 
 function validMessage(value: unknown): value is ResolveRequest {
@@ -80,6 +113,7 @@ function reserveRequest(platform: Platform): Promise<number | null> {
 }
 
 async function resolveMetadata(req: ResolveRequest, sender: chrome.runtime.MessageSender): Promise<ResolveResponse> {
+  await ensureFallbackCacheCleanup();
   const cacheKey = `${CACHE_PREFIX}${req.platform}:${req.id}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey] as CacheEntry | undefined;
   if (cached && Date.now() - cached.timestamp < cacheLifetime(cached.metadata)) {
@@ -169,6 +203,10 @@ async function resolveMetadata(req: ResolveRequest, sender: chrome.runtime.Messa
     }
     const timestamp = Date.now();
     await chrome.storage.local.set({ [cacheKey]: { timestamp, metadata, diagnostic } satisfies CacheEntry });
+    if (!cached) fallbackCacheCount += 1;
+    if (fallbackCacheCount > MAX_FALLBACK_CACHE_ENTRIES) {
+      fallbackCacheCount = await cleanupFallbackCache(timestamp);
+    }
     return {
       metadata,
       status: metadata ? 'resolved' as const : 'unavailable' as const,

@@ -3,25 +3,65 @@ import { datePrecision, mergeMetadata } from './metadata';
 
 export const SELECTED_PREFIX = 'selected:';
 export const VERIFIED_PREFIX = 'verified:';
+const VERIFIED_CACHE_LIMIT = 500;
+const VERIFIED_CACHED_AT = '__cached_at';
 export const selectionKey = (record: Pick<VideoRecord, 'platform' | 'video_id'>) =>
   `${SELECTED_PREFIX}${record.platform}:${record.video_id}`;
 export const verifiedKey = (record: Pick<VideoRecord, 'platform' | 'video_id'>) =>
   `${VERIFIED_PREFIX}${record.platform}:${record.video_id}`;
 
+type StoredVerifiedMetadata = VideoMetadata & { [VERIFIED_CACHED_AT]?: number };
+
+function compactVerifiedMetadata(metadata: VideoMetadata): VideoMetadata {
+  const { published_at, published_date, published_relative, published_label, date_source } = metadata;
+  return mergeMetadata({ published_at, published_date, published_relative, published_label, date_source });
+}
+
+function withoutCacheTimestamp(value: StoredVerifiedMetadata): VideoMetadata {
+  const { [VERIFIED_CACHED_AT]: _cachedAt, ...metadata } = value;
+  return compactVerifiedMetadata(metadata);
+}
+
 export async function allVerifiedMetadata(): Promise<Map<string, VideoMetadata>> {
   const entries = await chrome.storage.local.get(null);
   const verified = new Map<string, VideoMetadata>();
+  const stored: Array<{ key: string; value: StoredVerifiedMetadata; cachedAt: number; selected: boolean }> = [];
   for (const [key, value] of Object.entries(entries)) {
     if (key.startsWith(VERIFIED_PREFIX) && value && typeof value === 'object' && !Array.isArray(value)) {
-      verified.set(key, value as VideoMetadata);
+      const item = value as StoredVerifiedMetadata;
+      stored.push({
+        key, value: item,
+        cachedAt: typeof item[VERIFIED_CACHED_AT] === 'number' ? item[VERIFIED_CACHED_AT]! : 0,
+        selected: Object.prototype.hasOwnProperty.call(entries, `${SELECTED_PREFIX}${key.slice(VERIFIED_PREFIX.length)}`),
+      });
     }
   }
+  const removable = stored.filter((item) => !item.selected)
+    .sort((a, b) => b.cachedAt - a.cachedAt)
+    .slice(VERIFIED_CACHE_LIMIT);
+  if (removable.length) await chrome.storage.local.remove(removable.map((item) => item.key));
+  const removed = new Set(removable.map((item) => item.key));
+  const replacements: Record<string, StoredVerifiedMetadata> = {};
+  for (const item of stored) {
+    if (removed.has(item.key)) continue;
+    const compact = withoutCacheTimestamp(item.value);
+    if (!datePrecision(compact)) {
+      await chrome.storage.local.remove(item.key);
+      continue;
+    }
+    verified.set(item.key, compact);
+    const cachedAt = item.cachedAt || Date.now();
+    const replacement = { ...compact, [VERIFIED_CACHED_AT]: cachedAt };
+    if (JSON.stringify(replacement) !== JSON.stringify(item.value)) replacements[item.key] = replacement;
+  }
+  if (Object.keys(replacements).length) await chrome.storage.local.set(replacements);
   return verified;
 }
 
 export async function getVerifiedMetadata(platform: Platform, video_id: string): Promise<VideoMetadata> {
   const key = verifiedKey({ platform, video_id });
-  return (await chrome.storage.local.get(key))[key] as VideoMetadata ?? {};
+  const value = (await chrome.storage.local.get(key))[key] as StoredVerifiedMetadata | undefined;
+  return value ? withoutCacheTimestamp(value) : {};
 }
 
 export async function saveVerifiedMetadata(
@@ -31,8 +71,14 @@ export async function saveVerifiedMetadata(
   const next = metadata.date_source === 'manual'
     ? mergeMetadata(prior, metadata)
     : mergeMetadata(prior, metadata, prior.date_source === 'manual' ? prior : {});
-  await chrome.storage.local.set({ [verifiedKey(record)]: next });
   await updateSelectedMetadata(record, next);
+  const compact = compactVerifiedMetadata(next);
+  const key = verifiedKey(record);
+  if (datePrecision(compact)) {
+    await chrome.storage.local.set({ [key]: { ...compact, [VERIFIED_CACHED_AT]: Date.now() } satisfies StoredVerifiedMetadata });
+  } else {
+    await chrome.storage.local.remove(key);
+  }
 }
 
 export async function allSelections(): Promise<VideoRecord[]> {
@@ -47,7 +93,7 @@ function isRecord(value: unknown): value is VideoRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<VideoRecord>;
   return !!record.video_id && !!record.video_url &&
-    ['Instagram', 'TikTok', 'Facebook'].includes(record.platform ?? '');
+    ['Instagram', 'TikTok', 'Facebook', 'YouTube'].includes(record.platform ?? '');
 }
 
 export async function saveSelection(record: VideoRecord): Promise<void> {
