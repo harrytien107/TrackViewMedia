@@ -1,13 +1,14 @@
 import { instagram } from './adapters/instagram';
 import { tiktok } from './adapters/tiktok';
 import { facebook } from './adapters/facebook';
+import { youtube } from './adapters/youtube';
 import { fetchVideoFromPage } from './page-fetch';
 import { contextFromUrl, identityFromUrl } from '../shared/urls';
 import { datePrecision, facebookTrackingMetadataFromScriptTexts, localDate, mergeMetadata, metadataFromPlatformId, metadataFromScriptTexts, metadataFromVideoHtml } from '../shared/metadata';
 import { allSelections, allVerifiedMetadata, removeSelection, saveSelection, saveVerifiedMetadata, selectionKey, updateSelectedMetadata, verifiedKey, SELECTED_PREFIX, VERIFIED_PREFIX } from '../shared/storage';
 import type { Candidate, PageContext, PageFetchRequest, ResolveRequest, ResolveResponse, VideoMetadata, VideoRecord } from '../shared/types';
 
-const adapters = { Instagram: instagram, TikTok: tiktok, Facebook: facebook };
+const adapters = { Instagram: instagram, TikTok: tiktok, Facebook: facebook, YouTube: youtube };
 const overlays = new Map<HTMLAnchorElement, Overlay>();
 const selected = new Map<string, VideoRecord>();
 const verified = new Map<string, VideoMetadata>();
@@ -17,6 +18,7 @@ const parsedScripts = new Map<string, unknown>();
 const SCRIPT_SELECTOR = 'script:not([src])';
 let scripts: string[] = [];
 const FALLBACK_CONCURRENCY = 3;
+const FACEBOOK_PROFILE_GRACE_MS = 400;
 let fallbackActive = 0;
 let scriptsVersion = 0;
 let facebookTrackingVersion = -1;
@@ -221,7 +223,7 @@ function pumpFallback(): void {
     if (Number.isFinite(next)) retryTimer = window.setTimeout(() => {
       retryTimer = null;
       pumpFallback();
-    }, Math.max(1000, next - Date.now()));
+    }, Math.max(50, next - Date.now()));
   }
 }
 
@@ -271,7 +273,9 @@ function refreshScripts(): void {
   const updated = Array.from(document.querySelectorAll<HTMLScriptElement>(SCRIPT_SELECTOR))
     .filter((script) => script.type === 'application/json' ||
       ['SIGI_STATE', '__NEXT_DATA__', '__UNIVERSAL_DATA_FOR_REHYDRATION__'].includes(script.id) ||
-      (script.textContent?.includes('ScheduledServerJS') ?? false))
+      (script.textContent?.includes('ScheduledServerJS') ?? false) ||
+      (script.textContent?.includes('ytInitialData') ?? false) ||
+      (script.textContent?.includes('ytInitialPlayerResponse') ?? false))
     .map((script) => script.textContent ?? '').filter((text) => text.length < 2_000_000);
   if (updated.length === scripts.length && updated.every((text, index) => text === scripts[index])) return;
   const previous = new Set(scripts);
@@ -413,6 +417,10 @@ function scan(): void {
       const ready = mergeRecord(record, selectedRecord ?? {}, record, savedVerification);
       const added = createOverlay(candidate, ready);
       overlays.set(candidate.anchor, added);
+      if (ctx.platform === 'Facebook' && !datePrecision(ready)) {
+        const key = selectionKey(ready);
+        if (!nextAttempt.has(key)) nextAttempt.set(key, Date.now() + FACEBOOK_PROFILE_GRACE_MS);
+      }
     }
     const active = overlays.get(candidate.anchor)!;
     if (selectedRecord) {

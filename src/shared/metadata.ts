@@ -248,7 +248,9 @@ function extractItem(item: Record<string, unknown>, platform: Platform): VideoMe
     ? ['taken_at_timestamp', 'taken_at', 'taken_at_date', 'published_at', 'datePublished', 'uploadDate']
     : platform === 'TikTok'
       ? ['createTime', 'create_time', 'createTimeISO', 'datePublished', 'uploadDate']
-      : ['publish_time', 'creation_time', 'created_time', 'publish_date', 'datePublished', 'uploadDate'];
+      : platform === 'YouTube'
+        ? ['publishDate', 'uploadDate', 'datePublished', 'publish_date']
+        : ['publish_time', 'creation_time', 'created_time', 'publish_date', 'datePublished', 'uploadDate'];
   for (const key of fields) {
     const parsed = verifiedTimestamp(item[key]);
     if (parsed) { out.published_at = parsed; break; }
@@ -261,7 +263,7 @@ function extractItem(item: Record<string, unknown>, platform: Platform): VideoMe
     const label = verifiedRelativeDate(item[key]);
     if (label) { out.published_relative = label; break; }
   }
-  for (const key of ['desc', 'caption', 'description', 'title', 'accessibility_caption']) {
+  for (const key of ['desc', 'caption', 'description', 'shortDescription', 'title', 'accessibility_caption']) {
     const caption = cleanCaption(item[key]);
     if (caption) { out.caption = caption; break; }
   }
@@ -269,7 +271,7 @@ function extractItem(item: Record<string, unknown>, platform: Platform): VideoMe
     (value): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value),
   );
   for (const state of stats) {
-    for (const name of ['playCount', 'play_count', 'view_count', 'video_view_count', 'views'] as const) {
+    for (const name of ['playCount', 'play_count', 'viewCount', 'view_count', 'video_view_count', 'views'] as const) {
       if (state[name] !== undefined) { metricFields(out, 'views', state[name]); break; }
     }
     for (const name of ['diggCount', 'like_count', 'likeCount', 'likes'] as const) {
@@ -357,13 +359,40 @@ function facebookTrackingMatchesVideo(node: Record<string, unknown>, id: string)
   return ids.size === 1 && ids.has(id);
 }
 
+function facebookProfileNodeIds(node: Record<string, unknown>): Set<string> {
+  const ids = facebookTrackingIds(node);
+  const add = (value: unknown) => {
+    if (typeof value === 'string' || typeof value === 'number') ids.add(String(value));
+  };
+  add(node.videoId);
+  add(node.video_id);
+  add(node.top_level_post_id);
+  add(node.post_id);
+  const storyFbid = node.story_fbid;
+  if (Array.isArray(storyFbid)) storyFbid.forEach(add);
+  else add(storyFbid);
+  const video = node.video;
+  if (video && typeof video === 'object' && !Array.isArray(video)) add((video as Record<string, unknown>).id);
+  const shortForm = node.short_form_video_context;
+  if (shortForm && typeof shortForm === 'object' && !Array.isArray(shortForm)) {
+    for (const key of ['playback_video', 'video']) {
+      const value = (shortForm as Record<string, unknown>)[key];
+      if (value && typeof value === 'object' && !Array.isArray(value)) add((value as Record<string, unknown>).id);
+    }
+  }
+  if ((node.creation_time !== undefined || node.publish_time !== undefined || node.creation_story) &&
+      (typeof node.id === 'string' || typeof node.id === 'number')) add(node.id);
+  return ids;
+}
+
 /** Parse Facebook profile tracking payloads once so all visible Reel dates can be populated together. */
 export function facebookTrackingMetadataFromScriptTexts(
   texts: string[], parsedCache?: Map<string, unknown>,
 ): Map<string, VideoMetadata> {
   const found = new Map<string, VideoMetadata>();
   for (const text of texts) {
-    if (!text.includes('tracking') || !text.includes('publish_time') || text.length > 2_000_000) continue;
+    if (text.length > 2_000_000 ||
+        !/(?:tracking|publish_time|creation_time|short_form_video_context)/.test(text)) continue;
     try {
       const raw = unwrapScriptJson(text);
       if (!raw) continue;
@@ -396,6 +425,22 @@ export function facebookTrackingMetadataFromScriptTexts(
               if (datePrecision(metadata)) found.set(id, mergeMetadata(found.get(id) ?? {}, metadata));
             }
           } catch { /* tracking field is not JSON */ }
+        }
+        const ids = facebookProfileNodeIds(node);
+        let metadata = extractItem(node, 'Facebook');
+        const postContext = node.post_context;
+        if (postContext && typeof postContext === 'object' && !Array.isArray(postContext)) {
+          metadata = mergeMetadata(metadata, extractItem(postContext as Record<string, unknown>, 'Facebook'));
+        }
+        const creationStory = node.creation_story;
+        if (creationStory && typeof creationStory === 'object' && !Array.isArray(creationStory)) {
+          const story = creationStory as Record<string, unknown>;
+          metadata = mergeMetadata(metadata, extractItem(story, 'Facebook'));
+          for (const storyId of facebookProfileNodeIds(story)) ids.add(storyId);
+        }
+        metadata = withSource(metadata, 'embedded');
+        if (datePrecision(metadata)) {
+          for (const id of ids) found.set(id, mergeMetadata(found.get(id) ?? {}, metadata));
         }
         for (const child of Object.values(node)) if (child && typeof child === 'object') stack.push(child);
       }
@@ -446,10 +491,63 @@ export function metadataFromScriptTexts(
 function unwrapScriptJson(text: string): string | null {
   const raw = text.trim().replace(/^for\s*\(;;\)\s*;?\s*/, '');
   if (raw.startsWith('{') || raw.startsWith('[')) return raw;
+  const youtubeAssignment = raw.match(/^(?:var\s+)?(?:ytInitialData|ytInitialPlayerResponse)\s*=\s*/);
+  if (youtubeAssignment) {
+    const start = raw.indexOf('{', youtubeAssignment[0].length);
+    if (start >= 0) {
+      const object = balancedJsonObject(raw, start);
+      if (object) return object;
+    }
+  }
   const wrapped = raw.match(/(?:^|\.)handle\s*\(\s*([\s\S]+)\s*\)\s*;?\s*$/);
   if (!wrapped) return null;
   const argument = wrapped[1].trim();
   return argument.startsWith('{') || argument.startsWith('[') ? argument : null;
+}
+
+function balancedJsonObject(text: string, start: number): string | null {
+  if (text[start] !== '{') return null;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') { quoted = true; continue; }
+    if (char === '{') depth += 1;
+    else if (char === '}' && --depth === 0) return text.slice(start, index + 1);
+  }
+  return null;
+}
+
+function youtubePlayerMetadataFromHtml(html: string, id: string): VideoMetadata {
+  const marker = /(?:var\s+)?ytInitialPlayerResponse\s*=\s*/g;
+  for (const match of html.matchAll(marker)) {
+    const start = html.indexOf('{', (match.index ?? 0) + match[0].length);
+    if (start < 0) continue;
+    const raw = balancedJsonObject(html, start);
+    if (!raw) continue;
+    try {
+      const player = JSON.parse(raw) as Record<string, unknown>;
+      const details = player.videoDetails;
+      if (!details || typeof details !== 'object' || Array.isArray(details) ||
+          String((details as Record<string, unknown>).videoId ?? '') !== id) continue;
+      const microformat = player.microformat;
+      const renderer = microformat && typeof microformat === 'object' && !Array.isArray(microformat)
+        ? (microformat as Record<string, unknown>).playerMicroformatRenderer : null;
+      return mergeMetadata(
+        extractItem(details as Record<string, unknown>, 'YouTube'),
+        renderer && typeof renderer === 'object' && !Array.isArray(renderer)
+          ? extractItem(renderer as Record<string, unknown>, 'YouTube') : {},
+      );
+    } catch { /* malformed player response */ }
+  }
+  return {};
 }
 
 function decodeEntities(value: string): string {
@@ -589,6 +687,10 @@ export function metadataFromVideoHtml(html: string, id: string, platform: Platfo
     Object.assign(part, tiktokDateFromVideoHtml(html));
   }
   out.push(part);
+  if (platform === 'YouTube') {
+    const player = youtubePlayerMetadataFromHtml(html, id);
+    if (Object.keys(player).length) out.push(player);
+  }
 
   for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
     const attrs = readHtmlAttributes(match[1]);

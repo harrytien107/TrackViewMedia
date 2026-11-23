@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { contextFromUrl, identityFromUrl } from './urls';
 
 describe('supported pages', () => {
-  it('recognizes the three supplied profile examples', () => {
+  it('recognizes the supplied profile examples', () => {
     expect(contextFromUrl('https://www.instagram.com/ssam_kbbq/reels/')).toEqual({
       platform: 'Instagram', username: 'ssam_kbbq', kind: 'profile',
     });
@@ -14,6 +14,9 @@ describe('supported pages', () => {
     });
     expect(contextFromUrl('https://www.facebook.com/people/Ssam-KBBQ-Bar/61574788228123/?sk=reels_tab')).toEqual({
       platform: 'Facebook', username: '61574788228123', kind: 'profile',
+    });
+    expect(contextFromUrl('https://www.youtube.com/@SSam-2026/shorts')).toEqual({
+      platform: 'YouTube', username: 'SSam-2026', kind: 'profile',
     });
   });
 
@@ -29,6 +32,11 @@ describe('supported pages', () => {
       .toBe('https://www.facebook.com/reel/123456789');
     expect(identityFromUrl('https://www.facebook.com/61574788228123/videos/rice-lovers-and-food/1130192402541878/', 'Facebook')?.id)
       .toBe('1130192402541878');
+    expect(identityFromUrl('https://www.youtube.com/shorts/AbC_123-def?si=tracking', 'YouTube')).toEqual({
+      id: 'AbC_123-def', url: 'https://www.youtube.com/shorts/AbC_123-def', username: null,
+    });
+    expect(identityFromUrl('https://www.youtube.com/watch?v=AbC_123-def&feature=share', 'YouTube')?.url)
+      .toBe('https://www.youtube.com/shorts/AbC_123-def');
   });
 
   it('rejects third-party, unsupported, and non-video URLs', () => {
@@ -38,5 +46,6 @@ describe('supported pages', () => {
     expect(contextFromUrl('https://www.instagram.com/explore/')).toBeNull();
     expect(identityFromUrl('https://www.instagram.com/reel/%E0%A4/', 'Instagram')).toBeNull();
     expect(contextFromUrl('https://www.facebook.com/')).toBeNull();
+    expect(contextFromUrl('https://www.youtube.com/@SSam-2026/videos')).toBeNull();
   });
 });

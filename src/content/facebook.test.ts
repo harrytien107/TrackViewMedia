@@ -8,9 +8,10 @@ describe('Facebook late-loaded Reel metadata', () => {
 
   it('refreshes dates after scripts arrive or change and keeps one overlay per tile', async () => {
     vi.useFakeTimers();
+    const sendMessage = vi.fn(async () => ({ metadata: null }));
     vi.stubGlobal('chrome', {
       runtime: {
-        sendMessage: vi.fn(async () => ({ metadata: null })),
+        sendMessage,
         onMessage: { addListener: vi.fn() },
       },
       storage: {
@@ -29,7 +30,8 @@ describe('Facebook late-loaded Reel metadata', () => {
     await vi.advanceTimersByTimeAsync(170);
     const anchor = document.querySelector('a')!;
     const badge = () => anchor.querySelector<HTMLDivElement>('[data-track-view-media="overlay"]')!;
-    expect(badge().shadowRoot?.querySelector('.date')?.textContent).toBe('Date unavailable');
+    expect(badge().shadowRoot?.querySelector('.date')?.textContent).toBe('Loading date...');
+    expect(sendMessage).not.toHaveBeenCalled();
 
     const data = (time: number) => JSON.stringify({ collection: { edges: [
       { node: { creation_time: time, short_form_video_context: { playback_video: { id } } } },
@@ -117,7 +119,7 @@ describe('Facebook late-loaded Reel metadata', () => {
 
     const { stopTracking } = await import('./index');
     shutdown = stopTracking;
-    await vi.advanceTimersByTimeAsync(220);
+    await vi.advanceTimersByTimeAsync(620);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(stored[`verified:Facebook:${id}`]).toMatchObject({

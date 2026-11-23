@@ -4,6 +4,7 @@ const hostMap: Record<Platform, RegExp> = {
   Instagram: /^(?:www\.)?instagram\.com$/i,
   TikTok: /^(?:www\.|m\.)?tiktok\.com$/i,
   Facebook: /^(?:www\.|m\.|web\.)?facebook\.com$/i,
+  YouTube: /^(?:www\.|m\.)?youtube\.com$/i,
 };
 
 export function platformForUrl(url: URL): Platform | null {
@@ -34,6 +35,16 @@ export function identityFromUrl(raw: string, platform: Platform): VideoIdentity 
     username = match[1];
     id = match[2];
     canonical = `https://www.tiktok.com/@${username}/video/${id}`;
+  } else if (platform === 'YouTube') {
+    let match = path.match(/^\/shorts\/([A-Za-z0-9_-]{6,20})\/?$/);
+    if (!match) match = path.match(/^\/embed\/([A-Za-z0-9_-]{6,20})\/?$/);
+    if (match) id = match[1];
+    else if (/^\/watch\/?$/i.test(path)) {
+      const watch = url.searchParams.get('v');
+      if (watch && /^[A-Za-z0-9_-]{6,20}$/.test(watch)) id = watch;
+    }
+    if (!id) return null;
+    canonical = `https://www.youtube.com/shorts/${id}`;
   } else {
     let match = path.match(/^\/reel\/(\d+)\/?$/i);
     if (!match) match = path.match(/^\/[^/]+\/videos\/(?:[^/]+\/)?(\d+)\/?$/i);
@@ -73,6 +84,14 @@ export function contextFromUrl(raw: string): PageContext | null {
     if (video) return { platform, username: video.username ?? '', kind: 'video' };
     const match = path.match(/^\/@([\w.]+)\/?$/i);
     return match ? { platform, username: match[1], kind: 'profile' } : null;
+  }
+  if (platform === 'YouTube') {
+    if (/^\/shorts\/[A-Za-z0-9_-]{6,20}\/?$/.test(path)) {
+      const video = identityFromUrl(raw, platform);
+      return video ? { platform, username: '', kind: 'video' } : null;
+    }
+    const profile = path.match(/^\/@([\w.-]+)\/shorts\/?$/i);
+    return profile ? { platform, username: profile[1], kind: 'profile' } : null;
   }
   const video = identityFromUrl(raw, platform);
   if (video) return { platform, username: '', kind: 'video' };

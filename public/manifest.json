@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "TrackViewMedia",
-  "version": "0.2.3",
-  "description": "Show verified publication dates and available views on public Reels and videos; export selected items.",
+  "version": "0.2.4",
+  "description": "Show verified publication dates and available views on public Reels, videos, and YouTube Shorts; export selected items.",
   "permissions": ["storage", "downloads"],
   "host_permissions": [
     "https://*.instagram.com/*",
     "https://*.tiktok.com/*",
-    "https://*.facebook.com/*"
+    "https://*.facebook.com/*",
+    "https://*.youtube.com/*"
   ],
   "action": { "default_popup": "popup.html", "default_title": "TrackViewMedia" },
   "background": { "service_worker": "background.js" },
@@ -16,7 +17,8 @@
       "matches": [
         "https://*.instagram.com/*",
         "https://*.tiktok.com/*",
-        "https://*.facebook.com/*"
+        "https://*.facebook.com/*",
+        "https://*.youtube.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

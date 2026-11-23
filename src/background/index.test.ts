@@ -14,6 +14,45 @@ describe('metadata fallback cache', () => {
 });
 
 describe('tab-origin metadata fallback', () => {
+  it('accepts a YouTube Short and keeps its resolver rate state independent', async () => {
+    vi.resetModules();
+    const state: Record<string, unknown> = {};
+    let listener: ((request: unknown, sender: chrome.runtime.MessageSender,
+      respond: (value: unknown) => void) => boolean) | undefined;
+    const pageFetch = vi.fn(async () => ({
+      metadata: { published_date: '2026-11-18', date_source: 'video_page' },
+      diagnostic: 'matched_video_date',
+    }));
+    vi.stubGlobal('fetch', vi.fn());
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage: pageFetch },
+      storage: { local: {
+        get: async (key: string) => ({ [key]: state[key] }),
+        set: async (entries: Record<string, unknown>) => { Object.assign(state, entries); },
+      } },
+      runtime: { onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } },
+    });
+    await import('./index');
+
+    const result = await new Promise<{ status: string; metadata: { published_date: string } }>((resolve) =>
+      listener?.(
+        {
+          type: 'resolve-metadata',
+          platform: 'YouTube',
+          id: 'AbC_123-def',
+          url: 'https://www.youtube.com/shorts/AbC_123-def',
+        },
+        { tab: { id: 8 }, url: 'https://www.youtube.com/@SSam-2026/shorts' } as chrome.runtime.MessageSender,
+        resolve as (value: unknown) => void,
+      ));
+
+    expect(result.status).toBe('resolved');
+    expect(result.metadata.published_date).toBe('2026-11-18');
+    expect(pageFetch).toHaveBeenCalledOnce();
+    expect(state['metadata_request_history:YouTube']).toBeDefined();
+    vi.unstubAllGlobals();
+  });
+
   it('allows the Facebook pagination batch beyond the default 12-request window', async () => {
     vi.resetModules();
     const now = Date.now();

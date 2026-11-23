@@ -13,6 +13,7 @@ const MAX_PER_WINDOW: Record<Platform, number> = {
   Instagram: 12,
   TikTok: 12,
   Facebook: 30,
+  YouTube: 30,
 };
 const MIN_GAP_MS = 300;
 const MAX_CONCURRENT = 3;
@@ -36,7 +37,7 @@ function validMessage(value: unknown): value is ResolveRequest {
   if (!value || typeof value !== 'object') return false;
   const req = value as Partial<ResolveRequest>;
   if (req.type !== 'resolve-metadata' || typeof req.platform !== 'string' ||
-    !['Instagram', 'TikTok', 'Facebook'].includes(req.platform) ||
+    !['Instagram', 'TikTok', 'Facebook', 'YouTube'].includes(req.platform) ||
     typeof req.id !== 'string' || typeof req.url !== 'string') return false;
   const identity = identityFromUrl(req.url, req.platform);
   return !!identity && identity.id === req.id && identity.url === req.url;

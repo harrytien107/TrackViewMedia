@@ -1,4 +1,4 @@
-export type Platform = 'Instagram' | 'TikTok' | 'Facebook';
+export type Platform = 'Instagram' | 'TikTok' | 'Facebook' | 'YouTube';
 
 export type Metric = number | string | null;
 export type DatePrecision = 'timestamp' | 'day' | 'month_day' | 'relative' | null;

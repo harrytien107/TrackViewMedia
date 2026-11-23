@@ -5,6 +5,7 @@ TrackViewMedia shows **publication dates**, **view counts**, and **selection/exp
 - Instagram Reels
 - TikTok videos
 - Facebook Reels
+- YouTube Shorts
 
 ## Install
 
@@ -32,7 +33,7 @@ Install the Firefox `.xpi` release. Automatic updates require a Mozilla-signed b
 
 ## How to use
 
-1. Open a supported profile's Reels/videos page.
+1. Open a supported profile's Reels, videos, or Shorts page.
 2. TrackViewMedia adds the available date and view count to each detected video.
 3. Scroll normally. Newly loaded videos are detected automatically.
 4. Click `+` to select videos.
@@ -80,4 +81,4 @@ Thorium releases must always use the same private signing key so the extension I
 - Selections are stored locally in the browser
 - Metadata requests are limited to the supported social platforms
 
-**Current version: v0.2.3**
+**Current version: v0.2.4**

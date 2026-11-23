@@ -177,6 +177,34 @@ describe('metadata extraction', () => {
     expect(metadataFromVideoHtml(html, '456', 'Facebook').published_at).toBeUndefined();
   });
 
+  it('reads a YouTube Shorts calendar date from matching VideoObject JSON-LD', () => {
+    const html = '<script type="application/ld+json">' + JSON.stringify({
+      '@type': 'VideoObject',
+      url: 'https://www.youtube.com/shorts/AbC_123-def',
+      uploadDate: '2026-11-18',
+      description: 'Short description',
+    }) + '</script>';
+    expect(metadataFromVideoHtml(html, 'AbC_123-def', 'YouTube')).toMatchObject({
+      published_date: '2026-11-18', caption: 'Short description', date_source: 'video_page',
+    });
+  });
+
+  it('reads YouTube player microformat date and exact view count for the matching Short', () => {
+    const player = {
+      videoDetails: { videoId: 'AbC_123-def', viewCount: '12345', shortDescription: 'Ssam short' },
+      microformat: { playerMicroformatRenderer: { publishDate: '2026-11-18', uploadDate: '2026-11-18' } },
+    };
+    const html = '<script>var ytInitialPlayerResponse = ' + JSON.stringify(player) + ';</script>';
+    expect(metadataFromVideoHtml(html, 'AbC_123-def', 'YouTube')).toMatchObject({
+      published_date: '2026-11-18',
+      views: 12345,
+      views_exact: true,
+      caption: 'Ssam short',
+      date_source: 'video_page',
+    });
+    expect(metadataFromVideoHtml(html, 'different-id', 'YouTube').published_date).toBeUndefined();
+  });
+
   it('matches an Instagram Reel post date without using comment timestamps', () => {
     const html = `<meta property="og:description" content="49 likes - user on January 21, 2025: hello">
       <a href="/p/DFHmVC0zHkj/c/18084466375592057/"><time datetime="2025-02-14T12:34:46.000Z">February 14, 2025</time></a>
@@ -311,6 +339,19 @@ describe('metadata extraction', () => {
     expect(found.get(second)).toMatchObject({ published_at: '2026-03-19T00:06:25.000Z', date_source: 'embedded' });
   });
 
+  it('bulk-collects Facebook creation_time from short-form Reel profile nodes', () => {
+    const id = '1130192402541878';
+    const payload = { collection: { edges: [{ node: {
+      creation_time: 1773878725,
+      short_form_video_context: { playback_video: { id } },
+    } }] } };
+    const found = facebookTrackingMetadataFromScriptTexts([JSON.stringify(payload)]);
+    expect(found.get(id)).toMatchObject({
+      published_at: '2026-03-19T00:05:25.000Z',
+      date_source: 'embedded',
+    });
+  });
+
   it('extracts only tile-scoped view counts', () => {
     document.body.innerHTML = `<a><img alt="Food reel"/><span aria-label="1.3K views"></span><time datetime="2026-10-21T09:11:12+07:00"></time></a>`;
     const data = metadataFromTile(document.querySelector('a')!);
@@ -330,5 +371,11 @@ describe('metadata extraction', () => {
     const tile = document.createElement('a');
     tile.innerHTML = '<span data-e2e="browser-video-time">11-18</span>';
     expect(metadataFromTile(tile, 'TikTok')).toMatchObject({ published_label: '11-18', date_source: 'tile' });
+  });
+  it('reads a YouTube compact view label from a Shorts tile', () => {
+    document.body.innerHTML = '<a><img alt="Short title"/><span aria-label="1.2K views">1.2K views</span></a>';
+    expect(metadataFromTile(document.querySelector('a')!, 'YouTube')).toMatchObject({
+      views: '1.2K', views_exact: false, views_source: 'tile',
+    });
   });
 });
