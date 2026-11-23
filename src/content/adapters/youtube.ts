@@ -17,6 +17,23 @@ function tileFor(anchor: HTMLAnchorElement): HTMLElement | null {
   return rect.width >= 90 && rect.height >= 90 ? tile : null;
 }
 
+function visibleViewMetric(tile: HTMLElement): ReturnType<typeof parseMetric> | null {
+  const candidates = [
+    ...tile.querySelectorAll<HTMLElement>(
+      '.shortsLockupViewModelHostMetadataSubhead, #metadata-line span, #metadata span, span, div',
+    ),
+  ];
+  for (const element of candidates) {
+    if (element.closest('[data-track-view-media]')) continue;
+    const text = element.textContent?.trim().replace(/\s+/g, ' ') ?? '';
+    const match = text.match(/(?:^|\s)(\d[\d,.]*\s*[KMB]?)\s+(?:views?|lượt xem)(?:\s|$)/i);
+    if (!match) continue;
+    const metric = parseMetric(match[1]);
+    if (metric.value !== null) return metric;
+  }
+  return null;
+}
+
 export const youtube = {
   platform: 'YouTube' as const,
   discover(): Candidate[] {
@@ -29,7 +46,12 @@ export const youtube = {
       if (!identity || !tile || seen.has(tile)) continue;
       seen.add(tile);
       const metadata = metadataFromTile(tile, 'YouTube');
-      if (metadata.views === undefined || metadata.views === null) {
+      const visibleMetric = visibleViewMetric(tile);
+      if (visibleMetric) {
+        metadata.views = visibleMetric.value;
+        metadata.views_exact = visibleMetric.exact;
+        metadata.views_source = 'tile';
+      } else if (metadata.views === undefined || metadata.views === null) {
         for (const element of tile.querySelectorAll<HTMLElement>('[aria-label], #metadata-line span, .shortsLockupViewModelHostMetadataSubhead')) {
           const raw = element.getAttribute('aria-label') ?? element.textContent ?? '';
           const match = raw.match(/(\d[\d,.]*\s*[KMB]?)\s+views?\b/i);

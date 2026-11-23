@@ -14,7 +14,7 @@ const MAX_PER_WINDOW: Record<Platform, number> = {
   Instagram: 12,
   TikTok: 12,
   Facebook: 30,
-  YouTube: 30,
+  YouTube: 120,
 };
 const MIN_GAP_MS = 300;
 const MAX_CONCURRENT = 3;

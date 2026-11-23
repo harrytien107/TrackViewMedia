@@ -92,7 +92,7 @@ describe('tab-origin metadata fallback', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps actual YouTube page fallbacks within 30 requests per five minutes', async () => {
+  it('allows YouTube fallback beyond 30 requests but caps it at 120 per five minutes', async () => {
     vi.resetModules();
     const now = Date.now();
     const state: Record<string, unknown> = {
@@ -129,8 +129,22 @@ describe('tab-origin metadata fallback', () => {
       resolve as (value: unknown) => void,
     ));
 
-    expect(result.status).toBe('rate_limited');
-    expect(pageFetch).not.toHaveBeenCalled();
+    expect(result.status).toBe('resolved');
+    expect(pageFetch).toHaveBeenCalledOnce();
+
+    state['metadata_request_history:YouTube'] = Array.from({ length: 120 }, (_, index) => now - index * 1000);
+    const limited = await new Promise<{ status: string }>((resolve) => listener?.(
+      {
+        type: 'resolve-metadata',
+        platform: 'YouTube',
+        id: 'ZyX_987-abc',
+        url: 'https://www.youtube.com/shorts/ZyX_987-abc',
+      },
+      { tab: { id: 8 }, url: 'https://www.youtube.com/@SSam-2026/shorts' } as chrome.runtime.MessageSender,
+      resolve as (value: unknown) => void,
+    ));
+    expect(limited.status).toBe('rate_limited');
+    expect(pageFetch).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
 

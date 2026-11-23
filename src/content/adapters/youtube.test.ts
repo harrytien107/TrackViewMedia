@@ -29,4 +29,21 @@ describe('YouTube Shorts adapter', () => {
     ]);
     vi.restoreAllMocks();
   });
+
+  it('reads the visible Shorts view text even without aria-label metadata', () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, width: 190, height: 338, left: 0, top: 0, right: 190, bottom: 338,
+      toJSON: () => ({}),
+    } as DOMRect);
+    document.body.innerHTML = `
+      <yt-lockup-view-model>
+        <a href="/shorts/ZyX_987-abc"><img alt="Steak short" src="x"></a>
+        <div class="shortsLockupViewModelHostMetadataSubhead"><span>7.4K views</span></div>
+      </yt-lockup-view-model>`;
+
+    expect(youtube.discover()[0].metadata).toMatchObject({
+      views: '7.4K', views_exact: false, views_source: 'tile',
+    });
+    vi.restoreAllMocks();
+  });
 });
