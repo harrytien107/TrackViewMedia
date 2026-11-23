@@ -65,7 +65,7 @@ export const youtube = {
           break;
         }
       }
-      videos.push({ anchor, tile, identity, metadata });
+      videos.push({ anchor, tile, overlayTarget: anchor, identity, metadata });
     }
     return videos;
   },

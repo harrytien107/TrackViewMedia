@@ -48,6 +48,8 @@ export interface VideoIdentity {
 export interface Candidate {
   anchor: HTMLAnchorElement;
   tile: HTMLElement;
+  /** Element that visually contains the thumbnail and should receive the overlay. */
+  overlayTarget?: HTMLElement;
   identity: VideoIdentity;
   metadata: VideoMetadata;
 }

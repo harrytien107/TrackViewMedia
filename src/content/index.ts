@@ -38,6 +38,7 @@ let verificationPending = false;
 interface Overlay {
   anchor: HTMLAnchorElement;
   tile: HTMLElement;
+  target: HTMLElement;
   host: HTMLDivElement;
   date: HTMLElement;
   views: HTMLElement;
@@ -122,6 +123,7 @@ function render(overlay: Overlay): void {
 }
 
 function createOverlay(candidate: Candidate, record: VideoRecord): Overlay {
+  const target = candidate.overlayTarget ?? candidate.tile;
   const host = document.createElement('div');
   host.dataset.trackViewMedia = 'overlay';
   host.style.cssText = 'position:absolute!important;inset:0!important;width:100%!important;height:100%!important;pointer-events:none!important;z-index:2147483000!important;';
@@ -149,13 +151,13 @@ function createOverlay(candidate: Candidate, record: VideoRecord): Overlay {
   const diagnostics = shadow.querySelector<HTMLElement>('.diagnostics')!;
   const selection = shadow.querySelector<HTMLButtonElement>('button')!;
   // Restore the original positioning when removing the badge.
-  if (getComputedStyle(candidate.tile).position === 'static') {
-    candidate.tile.dataset.tvmPosition = candidate.tile.style.position;
-    candidate.tile.style.position = 'relative';
+  if (getComputedStyle(target).position === 'static') {
+    target.dataset.tvmPosition = target.style.position;
+    target.style.position = 'relative';
   }
-  candidate.tile.appendChild(host);
+  target.appendChild(host);
   const overlay: Overlay = {
-    anchor: candidate.anchor, tile: candidate.tile, host, date, views, diagnostics, selection, record,
+    anchor: candidate.anchor, tile: candidate.tile, target, host, date, views, diagnostics, selection, record,
     lookupState: datePrecision(record) ? 'resolved' : (record.video_url ? 'queued' : 'failed'),
   };
   selection.addEventListener('click', (event) => {
@@ -182,10 +184,10 @@ function createOverlay(candidate: Candidate, record: VideoRecord): Overlay {
 
 function removeOverlay(overlay: Overlay): void {
   overlay.host.remove();
-  const other = Array.from(overlays.values()).some((v) => v !== overlay && v.tile === overlay.tile);
-  if (!other && overlay.tile.dataset.tvmPosition !== undefined) {
-    overlay.tile.style.position = overlay.tile.dataset.tvmPosition;
-    delete overlay.tile.dataset.tvmPosition;
+  const other = Array.from(overlays.values()).some((v) => v !== overlay && v.target === overlay.target);
+  if (!other && overlay.target.dataset.tvmPosition !== undefined) {
+    overlay.target.style.position = overlay.target.dataset.tvmPosition;
+    delete overlay.target.dataset.tvmPosition;
   }
   overlays.delete(overlay.anchor);
 }
@@ -407,7 +409,8 @@ function scan(): void {
   const youtubeMetadata = ctx.platform === 'YouTube' ? youtubeProfileMetadata() : null;
   for (const candidate of candidates) {
     const existing = overlays.get(candidate.anchor);
-    if (existing && (existing.record.video_id !== candidate.identity.id || existing.tile !== candidate.tile)) {
+    const target = candidate.overlayTarget ?? candidate.tile;
+    if (existing && (existing.record.video_id !== candidate.identity.id || existing.tile !== candidate.tile || existing.target !== target)) {
       removeOverlay(existing);
     }
     if (!structuredCache.has(candidate.identity.id)) {

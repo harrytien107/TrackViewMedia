@@ -49,6 +49,7 @@ describe('YouTube Shorts adapter', () => {
 
     const candidate = youtube.discover()[0];
     expect(candidate.tile.tagName).toBe('YTM-SHORTS-LOCKUP-VIEW-MODEL');
+    expect(candidate.overlayTarget).toBe(candidate.anchor);
     expect(candidate.metadata).toMatchObject({
       views: '7.4K', views_exact: false, views_source: 'tile',
     });

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TrackViewMedia",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Show verified publication dates and available views on public Reels, videos, and YouTube Shorts; export selected items.",
   "permissions": ["storage", "downloads"],
   "host_permissions": [

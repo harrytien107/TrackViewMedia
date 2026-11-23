@@ -56,6 +56,7 @@ describe('YouTube Shorts content integration', () => {
 
     const overlays = () => document.querySelectorAll<HTMLDivElement>('[data-track-view-media="overlay"]');
     expect(overlays()).toHaveLength(1);
+    expect(overlays()[0].parentElement?.matches('a[href*="/shorts/"]')).toBe(true);
     expect(overlays()[0].shadowRoot?.querySelector('.date')?.textContent).toContain('2026');
     expect(overlays()[0].shadowRoot?.querySelector('.views')?.textContent).toBe('≈ 1.2K views');
     expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
